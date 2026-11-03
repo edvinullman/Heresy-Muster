@@ -409,51 +409,61 @@ function limitText(l) {
 // Render the options under a parent selection.
 function renderOptions(parent, depth = 0) {
   const items = roster.options(parent);
-  return `<div class="opts">${renderItems(parent, items, depth, null)}</div>`;
+  return `<div class="opts">${renderItems(parent, items, depth)}</div>`;
 }
 
-function renderItems(parent, items, depth, radioGroup) {
+// ctx: { radio: id of the enclosing one-of group or null, room: limits of enclosing groups }
+function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
   return items.map(it => {
     const visible = !it.state.hidden || it.count > 0;
     if (!visible) return '';
-    return it.kind === 'group' ? renderGroup(parent, it, depth) : renderEntry(parent, it, depth, radioGroup);
+    return it.kind === 'group' ? renderGroup(parent, it, depth, ctx) : renderEntry(parent, it, depth, ctx);
   }).join('');
 }
 
 function itemId(parent, it) { return parent.uid + ':' + it.groups.map(g => g.key).join('/') + '/' + it.node.key; }
 
-function renderGroup(parent, it, depth) {
+function hasVisibleEntries(it) {
+  return it.children.some(c => (!c.state.hidden || c.count > 0) && (c.kind === 'entry' || hasVisibleEntries(c)));
+}
+
+function renderGroup(parent, it, depth, ctx) {
   const l = roster.limitsOf(it.state);
-  const direct = it.children.filter(c => !c.state.hidden || c.count > 0);
-  const radio = l.max === 1 && direct.length > 1 && direct.every(c => c.kind === 'entry');
   const gid = itemId(parent, it);
   let inner;
-  if (radio) {
+  if (ctx.radio) {
+    // Already inside a one-of group: just a sub-heading.
+    inner = renderItems(parent, it.children, depth, ctx);
+  } else if (l.max === 1 && hasVisibleEntries(it)) {
+    // One choice across everything in this group, however deeply nested.
     const none = l.min === 0 ? `<div class="opt"><label><input type="radio" name="${esc(gid)}" data-act="radio" data-parent="${parent.uid}" data-group="${esc(gid)}" data-item="" ${it.count === 0 ? 'checked' : ''}><span class="oname">None</span></label></div>` : '';
-    inner = none + renderItems(parent, it.children, depth, gid);
+    inner = none + renderItems(parent, it.children, depth, { radio: gid, room: ctx.room });
   } else {
-    inner = renderItems(parent, it.children, depth, null);
+    const room = l.max >= 0 ? ctx.room.concat([{ max: l.max, count: it.count }]) : ctx.room;
+    inner = renderItems(parent, it.children, depth, { radio: null, room });
   }
   if (!inner.trim()) return '';
-  const lt = limitText(l);
+  const lt = ctx.radio ? '' : limitText(l);
   return `<fieldset class="ogroup"><legend>${esc(it.state.name)}${lt ? `<span class="lim">${lt}</span>` : ''}</legend>${inner}</fieldset>`;
 }
 
-function renderEntry(parent, it, depth, radioGroup) {
+function renderEntry(parent, it, depth, ctx) {
   const l = roster.limitsOf(it.state);
   const id = itemId(parent, it);
   const name = esc(it.state.name);
   const hiddenCls = it.state.hidden ? 'hiddenopt' : '';
+  // How many of this entry fit, given its own limit and every enclosing group's limit.
+  let cap = l.max >= 0 ? l.max : Infinity;
+  for (const g of ctx.room) cap = Math.min(cap, g.max - g.count + it.count);
   let control;
-  if (radioGroup) {
-    control = `<label><input type="radio" name="${esc(radioGroup)}" data-act="radio" data-parent="${parent.uid}" data-group="${esc(radioGroup)}" data-item="${esc(id)}" ${it.count > 0 ? 'checked' : ''}><span class="oname">${name}</span></label>`;
+  if (ctx.radio) {
+    control = `<label><input type="radio" name="${esc(ctx.radio)}" data-act="radio" data-parent="${parent.uid}" data-group="${esc(ctx.radio)}" data-item="${esc(id)}" ${it.count > 0 ? 'checked' : ''}><span class="oname">${name}</span></label>`;
   } else if (l.max === 1 && it.node.type !== 'model') {
-    const locked = l.min >= 1 && it.count >= 1;
+    const locked = (l.min >= 1 && it.count >= 1) || (it.count === 0 && cap < 1);
     control = `<label><input type="checkbox" data-act="check" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count > 0 ? 'checked' : ''} ${locked ? 'disabled' : ''}><span class="oname">${name}</span></label>`;
   } else {
-    const max = l.max;
     control = `<label><span class="oname">${name}</span></label>
-      <span class="stepper"><button data-act="step" data-d="-1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count <= 0 ? 'disabled' : ''} aria-label="Fewer ${name}">−</button><output>${it.count}</output><button data-act="step" data-d="1" data-parent="${parent.uid}" data-item="${esc(id)}" ${max >= 0 && it.count >= max ? 'disabled' : ''} aria-label="More ${name}">+</button></span>`;
+      <span class="stepper"><button data-act="step" data-d="-1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count <= 0 ? 'disabled' : ''} aria-label="Fewer ${name}">−</button><output>${it.count}</output><button data-act="step" data-d="1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count >= cap ? 'disabled' : ''} aria-label="More ${name}">+</button></span>`;
   }
   const cost = costLabel(it.state);
   let html = `<div class="opt ${hiddenCls}">${control}<span class="ocost">${cost}</span></div>`;
