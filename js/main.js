@@ -5,6 +5,7 @@ import { Roster, newRosterRaw } from './engine.js';
 import { loadLists, upsertList, deleteList } from './store.js';
 import { encodeShare, decodeShare, loadPresets, addPreset, deletePreset, freshCopy } from './store.js';
 import { rosterText } from './export.js';
+import { buildHabits, suggestUnits, usualLoadout, usualOptions, loadoutSig, unitId } from './habits.js';
 import { POINTS_ID, DATA_COMMIT, DATA_DATE, DATA_REPO, DEFAULT_POINTS } from './config.js';
 
 const app = document.getElementById('app');
@@ -18,6 +19,8 @@ let sheet = null;       // { type, ... }
 let issues = [];        // validation results for current roster
 let confirmKey = null;  // pending inline confirmation
 let namingKey = null;   // which "save as preset" name field is open
+let habits = null;      // what you tend to take, from your other saved lists
+let usualHere = null;   // option chains you usually take for the unit being edited
 
 // ---------- helpers ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -87,6 +90,7 @@ async function route() {
       await ensureData(rosterCatIds(raw));
     } catch (e) { return showError(e); }
     roster = new Roster(data, raw);
+    habits = buildHabits(loadLists(), raw.id, loadPresets());
     issues = roster.validate();
     return render();
   }
@@ -423,8 +427,19 @@ function addUnitSheet() {
   const keys = [...groups.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
   const keysOk = new Set(choices.map(c => c.node.key));
   const presets = loadPresets().filter(p => p.kind === 'unit' && p.catalogueId === f.catalogueId && keysOk.has(p.key));
+  let suggested = '';
+  if (habits?.listCount) {
+    // Leave out army configuration entries; they are in every list.
+    const isConfig = (x) => x.force.parent.kind === 'roster' && x.force.forces.length > 0;
+    const current = [...new Set(roster.allSels.filter(x => x.parent.kind === 'force' && !isConfig(x)).map(x => unitId(x.force.catalogueId, x.raw)))];
+    const cands = choices.map(c => ({ id: f.catalogueId + '|' + c.node.key, key: c.node.key, name: c.state.name, cost: c.state.costs.get(POINTS_ID) }));
+    const sug = suggestUnits(habits, current, cands);
+    if (sug.length) suggested = `<div class="pick-group"><h4>From your lists</h4>${sug.map(c => `<button class="pick" data-act="pick-unit" data-key="${esc(c.key)}" data-name="${esc(c.name.toLowerCase())}">
+      <span>${esc(c.name)}<span class="hint sub-reason">${esc(c.reason)}</span></span><span class="pp">${c.cost ? pts(c.cost) : ''}</span></button>`).join('')}</div>`;
+  }
   const body = `<input class="search" type="search" placeholder="Search units" aria-label="Search units">
     ${presetRows(presets, 'pick-unit-preset')}
+    ${suggested}
     ${keys.map(k => `<div class="pick-group"><h4>${esc(data.categoryName(k, f.catalogueId))}</h4>
       ${groups.get(k).sort((a, b) => a.state.name.localeCompare(b.state.name)).map(c => {
         const cost = c.state.costs.get(POINTS_ID);
@@ -482,6 +497,14 @@ function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
   }).join('');
 }
 
+// Same chain format habits.js records: each selection's path, joined by '>' from the unit down.
+function optionChain(parent, it) {
+  const parts = [];
+  for (let p = parent; p && p.kind === 'sel' && p.parent?.kind === 'sel'; p = p.parent) parts.unshift(p.raw.path.join('/'));
+  parts.push(it.groups.map(g => g.key).concat([it.node.key]).join('/'));
+  return parts.join('>');
+}
+
 function itemId(parent, it) { return parent.uid + ':' + it.groups.map(g => g.key).join('/') + '/' + it.node.key; }
 
 function hasVisibleEntries(it) {
@@ -527,7 +550,10 @@ function renderEntry(parent, it, depth, ctx) {
       <span class="stepper"><button data-act="step" data-d="-1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count <= 0 ? 'disabled' : ''} aria-label="Fewer ${name}">−</button><output>${it.count}</output><button data-act="step" data-d="1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count >= cap ? 'disabled' : ''} aria-label="More ${name}">+</button></span>`;
   }
   const cost = costLabel(it.state);
-  let html = `<div class="opt ${hiddenCls}">${control}<span class="ocost">${cost}</span></div>`;
+ // Tag only real choices: not mandatory gear or the default pick.
+  const isDefault = l.min > 0 || it.state.defaultAmount > 0 || it.groups.some(g => g.target.defaultSelectionEntryId && it.node.ids.includes(g.target.defaultSelectionEntryId));
+  const usualTag = !isDefault && usualHere && usualHere.size && usualHere.has(optionChain(parent, it)) ? '<span class="usual-tag" title="You take this in most of your builds of this unit">usual</span>' : '';
+  let html = `<div class="opt ${hiddenCls}">${control}${usualTag}<span class="ocost">${cost}</span></div>`;
   // Nested options of the chosen entry (e.g. a model's wargear).
   if (depth < 4) {
     for (const s of it.sels || []) {
@@ -603,11 +629,16 @@ function unitSheet() {
   const iss = issuesFor(sel);
   const info = collectInfo(sel);
   const ck = 'rmu-' + sel.uid;
+  const hid = unitId(sel.force.catalogueId, sel.raw);
+  const usual = habits ? usualLoadout(habits, hid) : null;
+  const showUsual = usual && JSON.stringify(JSON.parse(loadoutSig({ selections: usual.selections }))) !== loadoutSig(sel.raw);
+  usualHere = habits ? usualOptions(habits, hid) : null;
   sheet.rules = info.rules;
   const body = `
     <div class="ustat"><span class="points">${pts(roster.selTotal(sel, POINTS_ID))} pts</span>
       <span class="hint">${esc(st.primary ? data.categoryName(st.primary, sel.force.catalogueId) : '')} · ${esc(sel.force.name)}</span></div>
     ${iss.length ? `<div class="msgs">${iss.map(i => `<div class="msg ${i.level}">${esc(i.msg)}</div>`).join('')}</div>` : ''}
+    ${showUsual ? `<div class="usual-bar"><span>${usual.preset ? `Your preset “${esc(usual.preset)}” has a different loadout.` : `You've built this unit the same way ${usual.count} times.`}</span><button class="btn small" data-act="apply-usual" data-uid="${sel.uid}">${usual.preset ? 'Use preset loadout' : 'Use your usual loadout'}</button></div>` : ''}
     ${renderOptions(sel)}
     <h3 class="sec">Profiles</h3>${renderProfiles(info.profiles) || '<p class="hint">No profiles.</p>'}
     <h3 class="sec">Rules</h3><div class="rules">${info.rules.map((r, i) => `<button class="rule-chip" data-act="rule" data-i="${i}">${esc(r.view.name)}</button>`).join('') || '<span class="hint">No rules listed.</span>'}</div>
@@ -681,7 +712,7 @@ document.addEventListener('click', async (ev) => {
     case 'name-unit-preset': namingKey = 'pu-' + uid; renderSheet(); sheetFocus('#pn-pu-' + uid, sheetRoot); return;
     case 'cancel-name': namingKey = null; sheet ? renderSheet() : render(); return;
     case 'ask-rm-preset': confirmKey = 'rmp-' + el.dataset.id; renderSheet(); return;
-    case 'rm-preset': deletePreset(el.dataset.id); confirmKey = null; renderSheet(); toast('Preset deleted'); return;
+    case 'rm-preset': deletePreset(el.dataset.id); confirmKey = null; habits = buildHabits(loadLists(), roster.raw.id, loadPresets()); renderSheet(); toast('Preset deleted'); return;
     case 'pick-unit-preset': {
       const f = findForce(sheet.uid);
       const p = loadPresets().find(x => x.id === el.dataset.id);
@@ -735,6 +766,14 @@ document.addEventListener('click', async (ev) => {
       if (!item) return;
       roster.setOptionCount(parent, item, Math.max(0, item.count + Number(el.dataset.d)));
       changed(); return;
+    }
+    case 'apply-usual': {
+      const s = findSel(uid);
+      const u = s && usualLoadout(habits, unitId(s.force.catalogueId, s.raw));
+      if (!u) return;
+      s.raw.selections = freshCopy({ selections: u.selections }).selections;
+      roster.refresh(); changed(); toast('Applied your usual loadout');
+      return;
     }
     case 'split': { const s = findSel(uid); if (s) roster.splitOne(s); changed(); return; }
     case 'rm-sel': { const s = findSel(uid); if (s) roster.removeSel(s); changed(); return; }
@@ -833,6 +872,7 @@ document.addEventListener('submit', (ev) => {
   preset.created = Date.now();
   if (!addPreset(preset)) { toast('Could not save: browser storage is full'); return; }
   namingKey = null;
+  habits = buildHabits(loadLists(), roster.raw.id, loadPresets());
   sheet ? renderSheet() : render();
   toast(`Saved preset “${name}”`);
 });

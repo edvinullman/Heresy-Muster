@@ -252,3 +252,8 @@ a.btn, a.icon-btn { text-decoration: none; }
 .preset-form { display: grid; gap: 6px; margin-block: 10px; padding: 10px 12px; border: 1px solid var(--brass); border-radius: 8px; background: var(--surface); }
 .preset-form label { font-weight: 600; font-size: .85rem; }
 .preset-form input { flex: 1; min-width: 10em; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+/* habits */
+.sub-reason { display: block; font-size: .8rem; margin-top: 2px; }
+.usual-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; margin-bottom: 10px; border: 1px dashed var(--brass); border-radius: 8px; font-size: .9rem; color: var(--muted); }
+.usual-bar span { flex: 1; min-width: 12em; }
+.usual-tag { font: 600 .68rem var(--font-data); text-transform: uppercase; letter-spacing: .05em; color: var(--brass); border: 1px solid var(--brass); border-radius: 4px; padding: 1px 5px; flex: none; }

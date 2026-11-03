@@ -18,6 +18,10 @@ under you.
 - Validation: slot limits, minimum and maximum choices, unit restrictions and the data's own error messages
 - Unit profiles, weapon tables and rule text on tap
 - Text export, share links and list files
+- Collapsible forces, and saved presets for units and detachments
+- Suggestions from your own habits: units you often take together, and your usual
+  loadout for a unit. Learned only from lists and presets saved in your browser;
+  presets count extra. It never ranks units by strength.
 
 ## Put it online (free)
 
