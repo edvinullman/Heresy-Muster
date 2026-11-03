@@ -1,0 +1,20 @@
+import fs from 'node:fs'; import path from 'node:path';
+import { GameData } from '../js/data.js'; import { Roster, newRosterRaw } from '../js/engine.js';
+import { MANIFEST } from '../js/manifest.js';
+const dir = process.argv[2]; const data = new GameData(MANIFEST);
+const gs = MANIFEST.find(m => m.type === 'gameSystem'); data.addFile(JSON.parse(fs.readFileSync(path.join(dir, gs.file))));
+const fac = MANIFEST.find(m => m.name.includes('World Eaters')); for (const m of data.filesNeeded(fac.id)) data.addFile(JSON.parse(fs.readFileSync(path.join(dir, m.file))));
+const r = new Roster(data, newRosterRaw({ name: 'T', catalogueId: fac.id, gameSystemId: gs.id, points: 3000 }));
+r.addForce(r.root, r.childForceChoices(r.root).find(c => c.node.name.startsWith('Crusade')).node);
+const P = () => r.allForces.find(x => x.node.name === 'Crusade Primary Detachment');
+r.addRoot(P(), r.rootChoices(P()).find(c => c.node.name === 'Centurion').node);
+const cen = () => r.allSels.find(s => s.node.name === 'Centurion' && s.parent.kind==='force');
+const show = (parent, items, d = 0) => items.forEach(i => {
+  const cons = i.state.constraints.map(c => `${c.type}${c.value}@${c.scope}${c.includeChildSelections?'+ics':''}${c.field!=='selections'?'('+c.field+')':''}`).join(' ');
+  if (!i.state.hidden) console.log(' '.repeat(d*2) + `${i.kind} ${i.state.name} n=${i.count} [${cons}]`);
+  if (i.children && !i.state.hidden) show(parent, i.children, d+1);
+  for (const s of i.sels||[]) if (d<6) show(s, r.options(s), d+2);
+});
+show(cen(), r.options(cen()));
+globalThis.r=r; globalThis.cen=cen;
+export {};

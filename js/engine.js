@@ -195,7 +195,7 @@ export class Roster {
     let n;
     if (field === 'selections') n = this.sumSel(scopeObj, s => this.matches(s, c.childId), ics, icf);
     else if (field === 'forces') n = this.countForces(scopeObj, c.childId, ics || icf);
-    else n = this.sumCost(scopeObj, field, ics, icf);
+    else n = this.sumCost(scopeObj, field, ics, icf, c.childId);
     this.counts.set(key, n);
     return n;
   }
@@ -227,16 +227,30 @@ export class Roster {
     return n;
   }
 
-  sumCost(scope, typeId, ics, icf) {
-    if (scope.kind === 'sel') return ics ? this.selTotal(scope, typeId) : scope.number * this.ownCost(scope, typeId);
+  // Sum a cost type in a scope. Detachments carry costs too (e.g. "Apex Detachment(s)").
+  sumCost(scope, typeId, ics, icf, childId) {
+    const all = !childId || childId === 'any';
     let total = 0;
-    const visitForce = (f) => {
-      for (const s of f.sels) total += ics ? this.selTotal(s, typeId) : s.number * this.ownCost(s, typeId);
-      if (icf) f.forces.forEach(visitForce);
+    const visitSel = (s, inMatch) => {
+      if (inMatch || all) { total += ics ? this.selTotal(s, typeId) : s.number * this.ownCost(s, typeId); return; }
+      if (this.matches(s, childId)) { total += this.selTotal(s, typeId); return; }
+      if (ics) s.children.forEach(c => visitSel(c, false));
     };
-    if (scope.kind === 'force') visitForce(scope);
-    else scope.forces.forEach(f => visitForce(f));
+    const visitForce = (f, inMatch) => {
+      const m = inMatch || all || this.matches(f, childId);
+      if (m) total += this.forceOwnCost(f, typeId);
+      f.sels.forEach(s => visitSel(s, m));
+      if (icf || ics) f.forces.forEach(cf => visitForce(cf, m));
+    };
+    if (scope.kind === 'sel') visitSel(scope, false);
+    else if (scope.kind === 'force') visitForce(scope, false);
+    else scope.forces.forEach(f => visitForce(f, false));
     return total;
+  }
+
+  forceOwnCost(f, typeId) {
+    const st = this.forceState(f);
+    return st ? (st.costs.get(typeId) || 0) : 0;
   }
 
   ownCost(sel, typeId) { return this.selState(sel).costs.get(typeId) || 0; }
@@ -449,8 +463,8 @@ export class Roster {
   }
 
   // ---------- profiles and rules ----------
-  profileView(p, ctx, entryMods = []) {
-    const st = { name: p.name, hidden: !!p.hidden, chars: (p.characteristics || []).map(c => ({ name: c.name, typeId: c.typeId, value: c.$text ?? '' })) };
+  profileView(p, ctx, entryMods = [], via = null) {
+    const st = { name: via?.name || p.name, hidden: !!(p.hidden || via?.hidden), chars: (p.characteristics || []).map(c => ({ name: c.name, typeId: c.typeId, value: c.$text ?? '' })) };
     const applyChar = (m, times) => {
       if (m.field === 'name') { st.name = textOp(st.name, m); return; }
       if (m.field === 'hidden') { st.hidden = m.value === true || m.value === 'true'; return; }
@@ -464,7 +478,7 @@ export class Roster {
       } else ch.value = textOp(ch.value, m);
     };
     for (const m of entryMods) applyChar(m, m.times || 1);
-    for (const e of (p.modifiers || []).map(m => ({ mod: m, groups: [] })).concat(
+    for (const e of [...(via?.modifiers || []), ...(p.modifiers || [])].map(m => ({ mod: m, groups: [] })).concat(
       (p.modifierGroups || []).flatMap(g => (g.modifiers || []).map(m => ({ mod: m, groups: [g] }))))) {
       if (e.groups.some(g => !this.conditionsPass(g, ctx))) continue;
       if (!this.conditionsPass(e.mod, ctx)) continue;
@@ -474,9 +488,9 @@ export class Roster {
     return st;
   }
 
-  ruleView(r, ctx) {
-    const st = { name: r.name, hidden: !!r.hidden, description: r.description || '', page: r.page, id: r.id };
-    for (const m of r.modifiers || []) {
+  ruleView(r, ctx, via = null) {
+    const st = { name: via?.name || r.name, hidden: !!(r.hidden || via?.hidden), description: r.description || '', page: r.page, id: r.id };
+    for (const m of [...(via?.modifiers || []), ...(r.modifiers || [])]) {
       if (!this.conditionsPass(m, ctx)) continue;
       if (m.field === 'name') st.name = textOp(st.name, m);
       else if (m.field === 'hidden') st.hidden = m.value === true || m.value === 'true';
@@ -489,8 +503,8 @@ export class Roster {
     const ctx = this.selCtx(sel);
     const st = this.selState(sel);
     const { profiles, rules } = sel.node.info();
-    const prof = profiles.map(({ obj }) => ({ obj, view: this.profileView(obj, ctx, st.charMods) })).filter(p => !p.view.hidden);
-    const rul = rules.map(({ obj }) => ({ obj, view: this.ruleView(obj, ctx) })).filter(r => !r.view.hidden);
+    const prof = profiles.map(({ obj, via }) => ({ obj, view: this.profileView(obj, ctx, st.charMods, via) })).filter(p => !p.view.hidden);
+    const rul = rules.map(({ obj, via }) => ({ obj, view: this.ruleView(obj, ctx, via) })).filter(r => !r.view.hidden);
     return { profiles: prof, rules: rul };
   }
 
@@ -737,35 +751,40 @@ export class Roster {
   }
 
   // Add the minimum required options (and defaults) under a new selection.
+  // One addition at a time, re-reading the options after each, so nested
+  // group minimums are never satisfied twice.
   autofill(raw, depth = 0) {
     if (depth > 6) return;
-    const sel = this.selByRaw(raw);
-    if (!sel) return;
     const created = [];
-    const visit = (items, allowDefaults) => {
-      for (const it of items) {
-        if (it.state.hidden) continue;
-        const { min, max } = this.limitsOf(it.state);
-        if (it.kind === 'group') {
-          let filled = it.count > 0;
-          if (min > it.count) {
-            const pick = pickDefault(it);
-            if (pick) { created.push(this.addRawChild(sel, pick.node, pick.groups, min - it.count)); filled = true; }
-          }
-          // A group that already has its choice made gets no extra defaults.
-          visit(it.children, allowDefaults && !filled && max !== 0);
-          continue;
-        }
-        let want = min;
-        if (!want && allowDefaults && it.state.defaultAmount > 0) want = it.state.defaultAmount;
-        if (want > it.count) created.push(this.addRawChild(sel, it.node, it.groups, want - it.count));
-      }
-    };
-    visit(this.options(sel), true);
-    if (created.length) {
-      this.refresh();
-      for (const r of created) this.autofill(r, depth + 1);
+    for (let guard = 0; guard < 60; guard++) {
+      const sel = this.selByRaw(raw);
+      if (!sel) return;
+      const step = this.nextFill(this.options(sel));
+      if (!step) break;
+      created.push(this.addRawChild(sel, step.node, step.groups, step.n));
     }
+    for (const r of created) this.autofill(r, depth + 1);
+  }
+
+  nextFill(items, allowDefaults = true) {
+    for (const it of items) {
+      if (it.state.hidden) continue;
+      const { min, max } = this.limitsOf(it.state);
+      if (max === 0) continue;
+      if (it.kind === 'group') {
+        if (min > it.count) {
+          const pick = pickDefault(it, this);
+          if (pick) return { node: pick.node, groups: pick.groups, n: min - it.count };
+        }
+        const inner = this.nextFill(it.children, allowDefaults && it.count === 0);
+        if (inner) return inner;
+        continue;
+      }
+      let want = min;
+      if (!want && allowDefaults && it.state.defaultAmount > 0) want = it.state.defaultAmount;
+      if (want > it.count) return { node: it.node, groups: it.groups, n: want - it.count };
+    }
+    return null;
   }
 
   addRawChild(parent, node, groups, number) {
@@ -776,17 +795,17 @@ export class Roster {
   }
 }
 
-function pickDefault(groupItem) {
+function pickDefault(groupItem, r) {
   const want = groupItem.state.defaultSelectionEntryId;
   const flat = [];
-  const walk = (items) => { for (const it of items) { if (it.kind === 'entry') flat.push(it); else walk(it.children); } };
+  const usable = (it) => !it.state.hidden && r.limitsOf(it.state).max !== 0;
+  const walk = (items) => { for (const it of items) { if (!usable(it)) continue; if (it.kind === 'entry') flat.push(it); else walk(it.children); } };
   walk(groupItem.children);
-  const visible = flat.filter(i => !i.state.hidden);
   if (want) {
-    const hit = visible.find(i => i.node.ids.includes(want));
+    const hit = flat.find(i => i.node.ids.includes(want));
     if (hit) return hit;
   }
-  return visible.find(i => i.state.defaultAmount > 0) || visible[0] || null;
+  return flat.find(i => i.state.defaultAmount > 0) || flat[0] || null;
 }
 
 function sameGroups(a, b) {

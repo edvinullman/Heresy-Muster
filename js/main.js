@@ -202,8 +202,25 @@ function issuesFor(obj) {
   return issues.filter(i => i.where && (i.where === obj || rootUnitOf(i.where) === obj));
 }
 
-function slotChips(f) {
+// Limits the data keeps as hidden costs, e.g. how many Auxiliary or Apex detachments are allowed.
+function allowanceChips(f) {
+  const st = roster.forceState(f);
+  if (!st) return '';
   const out = [];
+  for (const c of st.constraints) {
+    const field = c.field || 'selections';
+    if (c.type !== 'max' || field === 'selections' || field === 'forces' || field === POINTS_ID || field.startsWith('limit::')) continue;
+    const used = roster.count({ ...c, childId: c.owner }, { self: f, parent: f.parent, force: f });
+    const name0 = roster.costName(field);
+    if (!used && (!c.value || !/detachment/i.test(name0))) continue;
+    const name = name0.replace(/\(s\)$/, 's');
+    out.push(`<span class="slot ${used > c.value ? 'over' : used === c.value ? 'full' : ''}" title="${esc(name)} used / allowed">${esc(name)} ${pts(used)}/${pts(c.value)}</span>`);
+  }
+  return out.join('');
+}
+
+function slotChips(f) {
+  const out = [allowanceChips(f)];
   for (const s of roster.slots(f)) {
     if (s.state.hidden) continue;
     let max = -1, min = 0, n = 0;
@@ -415,7 +432,7 @@ function renderOptions(parent, depth = 0) {
 // ctx: { radio: id of the enclosing one-of group or null, room: limits of enclosing groups }
 function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
   return items.map(it => {
-    const visible = !it.state.hidden || it.count > 0;
+    const visible = (!it.state.hidden && roster.limitsOf(it.state).max !== 0) || it.count > 0;
     if (!visible) return '';
     return it.kind === 'group' ? renderGroup(parent, it, depth, ctx) : renderEntry(parent, it, depth, ctx);
   }).join('');
@@ -424,7 +441,7 @@ function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
 function itemId(parent, it) { return parent.uid + ':' + it.groups.map(g => g.key).join('/') + '/' + it.node.key; }
 
 function hasVisibleEntries(it) {
-  return it.children.some(c => (!c.state.hidden || c.count > 0) && (c.kind === 'entry' || hasVisibleEntries(c)));
+  return it.children.some(c => ((!c.state.hidden && roster.limitsOf(c.state).max !== 0) || c.count > 0) && (c.kind === 'entry' || hasVisibleEntries(c)));
 }
 
 function renderGroup(parent, it, depth, ctx) {
@@ -525,7 +542,8 @@ function renderProfiles(list) {
     const cols = ps[0].view.chars.map(c => c.name);
     html += `<div class="table-scroll"><table class="stats"><thead><tr><th>${esc(type)}</th>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${ps.map(p => `<tr><td>${esc(p.view.name)}</td>${cols.map(cn => { const v = p.view.chars.find(c => c.name === cn)?.value ?? ''; const long = String(v).length > 14 || (String(v).length > 6 && /[a-z]{3}/i.test(v));
-          return `<td class="${long ? 'wrap' : ''}">${esc(v)}</td>`; }).join('')}</tr>`).join('')}
+          const words = /[a-z]{2}/i.test(v);
+          return `<td class="${long ? 'wrap' : words ? 'txt' : ''}">${esc(v)}</td>`; }).join('')}</tr>`).join('')}
     </tbody></table></div>`;
   }
   return html;
