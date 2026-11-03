@@ -1,6 +1,7 @@
 import { MANIFEST } from './manifest.js';
 import { GameData } from './data.js';
-import { loadFiles, clearCache } from './loader.js';
+import { loadFiles, clearCache, fetchFileJson } from './loader.js';
+import { splitRules } from './rule-names.js';
 import { Roster, newRosterRaw } from './engine.js';
 import { loadLists, upsertList, deleteList } from './store.js';
 import { encodeShare, decodeShare, loadPresets, addPreset, deletePreset, freshCopy } from './store.js';
@@ -498,24 +499,33 @@ function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
 }
 
 // ---------- rule links inside weapon profiles ----------
-// Split "Heavy (FP), Blast (3\"), Breaching (5+)" into separate rules, keeping commas inside brackets.
-function splitRules(text) {
-  const out = []; let depth = 0, cur = '';
-  for (const ch of String(text)) {
-    if (ch === '(') depth++;
-    if (ch === ')') depth = Math.max(0, depth - 1);
-    if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out;
-}
-
 // Rule names become buttons when the data has text for them; others stay plain.
 function linkRules(text) {
   if (!text || text === '-') return esc(text);
-  return splitRules(text).map(t => data.ruleByName(t)
+  return splitRules(text).map(t => (data.ruleByName(t) || data.ruleLocation(t))
     ? `<button type="button" class="rule-link" data-act="rule-name" data-rule="${esc(t)}">${esc(t)}</button>`
     : esc(t)).join(', ');
+}
+
+// Get a rule, fetching the file that defines it if it isn't loaded yet.
+async function resolveRule(label) {
+  const r = data.ruleByName(label);
+  if (r) return r;
+  const loc = data.ruleLocation(label);
+  if (!loc) return null;
+  const m = MANIFEST.find(x => x.file === loc.file);
+  if (!m) return null;
+  const json = await fetchFileJson(m);
+  let found = null;
+  const walk = (o) => {
+    if (found || !o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (o.id === loc.id && o.description) { found = o; return; }
+    for (const k in o) if (o[k] && typeof o[k] === 'object') walk(o[k]);
+  };
+  walk(json);
+  if (found) data.addExtraRule(loc.key, found);
+  return found;
 }
 
 function ruleSummary(label) {
@@ -795,7 +805,11 @@ document.addEventListener('click', async (ev) => {
   const uid = el.dataset.uid;
   if (act === 'rule-name') {
     const label = el.dataset.rule;
-    const r = data.ruleByName(label);
+    let r = data.ruleByName(label);
+    if (!r && data.ruleLocation(label)) {
+      toast('Loading rule…');
+      try { r = await resolveRule(label); } catch { toast('Could not load that rule. Check your connection.'); return; }
+    }
     if (!r || !roster) return;
     hideTip();
     const view = roster.ruleView(r, { self: null, parent: roster.root, force: null, node: null });
@@ -972,8 +986,18 @@ if (window.matchMedia('(hover: hover)').matches) {
   document.addEventListener('mouseover', (e) => {
     const el = e.target.closest('.rule-link');
     if (!el) { hideTip(); return; }
-    const text = ruleSummary(el.dataset.rule);
+    let text = ruleSummary(el.dataset.rule);
+    if (!text && data.ruleLocation(el.dataset.rule)) {
+      text = 'Loading…';
+      resolveRule(el.dataset.rule).then(() => {
+        if (!tip.hidden && tip.dataset.rule === el.dataset.rule) {
+          const t = ruleSummary(el.dataset.rule);
+          if (t) tip.querySelector('span').textContent = t;
+        }
+      }).catch(() => {});
+    }
     if (!text) return;
+    tip.dataset.rule = el.dataset.rule;
     tip.innerHTML = `<strong>${esc(el.dataset.rule)}</strong><span>${esc(text)}</span><em>Click for the full rule</em>`;
     tip.hidden = false;
     const r = el.getBoundingClientRect();

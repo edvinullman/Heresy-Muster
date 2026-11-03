@@ -65,6 +65,21 @@ export async function loadFiles(data, entries, onProgress = () => {}) {
   }));
 }
 
+// Fetch one data file (from this browser's cache when possible) without loading it as a catalogue.
+export async function fetchFileJson(m) {
+  dbPromise ||= openDb();
+  const db = await dbPromise;
+  const key = DATA_COMMIT + '/' + m.file;
+  let text = await cacheGet(db, key);
+  if (!text) {
+    const res = await fetch(dataUrl(m.file));
+    if (!res.ok) throw new Error(`Could not download ${m.name} (HTTP ${res.status})`);
+    text = await res.text();
+    cachePut(db, key, text);
+  }
+  return JSON.parse(text);
+}
+
 export async function clearCache() {
   dbPromise ||= openDb();
   const db = await dbPromise;

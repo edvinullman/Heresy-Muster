@@ -58,6 +58,8 @@ Edit `js/config.js`: set `DATA_COMMIT` (full 40-character hash) and `DATA_DATE`.
 If the new commit adds, removes or renames catalogue files, regenerate `js/manifest.js`
 from that commit. It lists each file's name, id, size and catalogue links.
 
+Also rebuild `js/rule-index.js` with `node tools/build-rule-index.mjs <data-folder>`.
+
 Saved lists refer to entries by their data ids, so lists made on one commit usually open
 on a nearby one. Entries that no longer exist show as a warning.
 
@@ -82,6 +84,8 @@ option drop it when opened. Current corrections:
 | `js/data.js` | Indexes the data and resolves links between catalogues |
 | `js/engine.js` | Rules engine: modifiers, conditions, constraints, costs, validation |
 | `js/corrections.js` | Local fixes to mistakes in the data |
+| `js/rule-names.js` | Matches rule names on weapons to their rule (handles spelling slips) |
+| `js/rule-index.js` | Which data file defines each rule (names and ids only), for loading rules on demand |
 | `js/export.js` | Plain-text list export |
 | `js/store.js` | Saved lists and share links |
 | `js/main.js` | Interface |

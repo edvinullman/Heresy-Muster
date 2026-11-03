@@ -3,6 +3,8 @@
 // file runs in the browser and in Node tests.
 
 import { REMOVED_IDS } from './corrections.js';
+import { ruleKey, ruleKeys } from './rule-names.js';
+import { RULE_INDEX } from './rule-index.js';
 
 const DEF_KEYS = new Set([
   'selectionEntries', 'selectionEntryGroups', 'sharedSelectionEntries',
@@ -22,6 +24,7 @@ export class GameData {
     this._scopeCache = new Map();
     this._rootNodes = new Map();
     this._ruleIndex = null;
+    this.extraRules = new Map();
   }
 
   addFile(json) {
@@ -54,14 +57,17 @@ export class GameData {
   }
 
   // Find a rule's text by the name shown on a weapon, e.g. "Breaching (5+)" → "Breaching (X)".
+  // Looks in the loaded files first, then in rules fetched on demand.
   ruleByName(label) {
     if (!this._ruleIndex) {
       const idx = new Map();
       const add = (r, shared) => {
         if (!r?.name || !r.description) return;
-        const k = ruleKey(r.name);
-        const cur = idx.get(k);
-        if (!cur || (shared && !cur.shared)) idx.set(k, { r, shared });
+        for (const n of [r.name, ...(r.alias || [])]) {
+          const k = ruleKey(n);
+          const cur = idx.get(k);
+          if (!cur || (shared && !cur.shared)) idx.set(k, { r, shared });
+        }
       };
       for (const root of this.files.values()) {
         const walk = (o, key) => {
@@ -74,8 +80,25 @@ export class GameData {
       }
       this._ruleIndex = idx;
     }
-    return this._ruleIndex.get(ruleKey(label))?.r || null;
+    for (const k of ruleKeys(label)) {
+      const hit = this._ruleIndex.get(k)?.r || this.extraRules.get(k);
+      if (hit) return hit;
+    }
+    return null;
   }
+
+  // Where to fetch a rule that isn't in the loaded files: { file, id, key } or null.
+  ruleLocation(label) {
+    for (const k of ruleKeys(label)) {
+      const loc = RULE_INDEX[k];
+      if (loc) return { file: loc[0], id: loc[1], key: k };
+    }
+    return null;
+  }
+
+  // Remember a rule fetched on demand from another file.
+  addExtraRule(key, rule) { this.extraRules.set(key, rule); }
+
 
   manifestEntry(id) { return this.manifest.find(m => m.id === id); }
 
@@ -160,10 +183,6 @@ export class GameData {
   rootNode(catId, key) {
     return this.rootNodes(catId).find(n => n.key === key) || null;
   }
-}
-
-function ruleKey(name) {
-  return String(name).toLowerCase().replace(/\s*\([^)]*\)\s*$/, '').replace(/[“”"']/g, '').trim();
 }
 
 // Apply local corrections: drop removed entries, groups and links.
