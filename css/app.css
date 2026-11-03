@@ -270,8 +270,11 @@ a.btn, a.icon-btn { text-decoration: none; }
 @media (hover: hover) {
   .opt.has-wp:hover .wprof:not(.open) {
     display: grid; gap: 4px; position: absolute; z-index: 5; top: calc(100% - 2px); left: 0; right: 0;
-    box-shadow: var(--shadow); border: 1px solid var(--line); pointer-events: none;
+    box-shadow: var(--shadow); border: 1px solid var(--line);
   }
+  /* The floating profile belongs to its row, so moving onto it keeps it open
+     (and covers the row below) and its rule names can be clicked. */
+  .opt.has-wp:hover { z-index: 6; }
 }
 .wp-line { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
 .wp-stat { font: .85rem var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
