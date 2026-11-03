@@ -1,0 +1,710 @@
+import { MANIFEST } from './manifest.js';
+import { GameData } from './data.js';
+import { loadFiles, clearCache } from './loader.js';
+import { Roster, newRosterRaw } from './engine.js';
+import { loadLists, upsertList, deleteList } from './store.js';
+import { encodeShare, decodeShare } from './store.js';
+import { rosterText } from './export.js';
+import { POINTS_ID, DATA_COMMIT, DATA_DATE, DATA_REPO, DEFAULT_POINTS } from './config.js';
+
+const app = document.getElementById('app');
+const sheetRoot = document.getElementById('sheet-root');
+const data = new GameData(MANIFEST);
+const GS = MANIFEST.find(m => m.type === 'gameSystem');
+const FACTIONS = MANIFEST.filter(m => m.type === 'catalogue' && !m.library).sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
+
+let roster = null;      // current Roster
+let sheet = null;       // { type, ... }
+let issues = [];        // validation results for current roster
+let confirmKey = null;  // pending inline confirmation
+
+// ---------- helpers ----------
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pts = (n) => (Number.isInteger(n) ? n : Math.round(n * 10) / 10);
+function richText(s) {
+  const html = esc(s)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|\s)\*(\S.+?\S)\*(?=\s|$|[.,;:])/g, '$1<em>$2</em>');
+  return html.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+}
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2200);
+}
+const icon = {
+  back: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  close: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  menu: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>',
+  shield: '<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l10 5.5v6.5c0 6.5-4.4 11-10 12-5.6-1-10-5.5-10-12V9.5z" fill="none" stroke="currentColor" stroke-width="2.2" style="color:var(--brass)"/><path d="M16 10v12M11 15h10" stroke="currentColor" stroke-width="2" style="color:var(--brass)"/></svg>',
+};
+
+async function ensureData(catIds, label = 'Loading army data') {
+  const entries = new Set([GS]);
+  for (const id of catIds) for (const m of data.filesNeeded(id)) entries.add(m);
+  const todo = [...entries].filter(m => !data.files.has(m.id));
+  if (!todo.length) return;
+  app.innerHTML = `<div class="wrap loading"><h2 class="hero" style="font-family:var(--font-display)">${esc(label)}</h2>
+    <div class="barbox"><div class="barfill" id="lb"></div></div><div class="what" id="lw">Starting…</div>
+    <p class="hint">The first load downloads the data from GitHub. After that it opens from this device.</p></div>`;
+  await loadFiles(data, todo, (done, total, name) => {
+    const b = document.getElementById('lb'), w = document.getElementById('lw');
+    if (b) b.style.width = (total ? Math.round(done / total * 100) : 100) + '%';
+    if (w) w.textContent = `${name} · ${(done / 1e6).toFixed(1)} of ${(total / 1e6).toFixed(1)} MB`;
+  });
+}
+
+function rosterCatIds(raw) {
+  const ids = new Set([raw.catalogueId]);
+  const walk = (fs) => { for (const f of fs || []) { if (f.catalogueId) ids.add(f.catalogueId); walk(f.forces); } };
+  walk(raw.forces);
+  return [...ids];
+}
+
+function save() {
+  if (!roster) return;
+  upsertList(roster.raw);
+}
+
+function changed() {
+  save();
+  issues = roster.validate();
+  render();
+}
+
+// ---------- routing ----------
+async function route() {
+  const h = location.hash.slice(1);
+  closeSheet(false);
+  if (h.startsWith('r=')) return importShared(h.slice(2));
+  if (h.startsWith('list-')) {
+    const raw = loadLists().find(l => l.id === h.slice(5));
+    if (!raw) { location.hash = ''; return; }
+    try {
+      await ensureData(rosterCatIds(raw));
+    } catch (e) { return showError(e); }
+    roster = new Roster(data, raw);
+    issues = roster.validate();
+    return render();
+  }
+  if (h === 'new') { roster = null; return renderNew(); }
+  roster = null;
+  renderHome();
+}
+
+function showError(e) {
+  app.innerHTML = `<div class="wrap hero"><h2>Couldn't load the data</h2><p>${esc(e.message || e)}</p>
+  <p class="hint">Check your connection and try again. The files come from github.com.</p>
+  <div class="row" style="margin-top:14px"><button class="btn primary" data-act="reload">Try again</button><a class="btn ghost" href="#">Back to lists</a></div></div>`;
+}
+
+async function importShared(code) {
+  try {
+    const raw = await decodeShare(code);
+    const existing = loadLists().find(l => l.id === raw.id);
+    if (existing) raw.id = raw.id + '-' + Math.random().toString(36).slice(2, 6);
+    raw.name = raw.name || 'Shared list';
+    upsertList(raw);
+    toast('List added to your lists');
+    location.replace('#list-' + raw.id);
+  } catch (e) {
+    toast('That share link is damaged');
+    location.replace('#');
+  }
+}
+
+// ---------- home ----------
+function renderHome() {
+  const lists = loadLists();
+  const facName = (id) => MANIFEST.find(m => m.id === id)?.name || 'Unknown faction';
+  app.innerHTML = `
+  <div class="bar"><div class="wrap"><div class="brand">${icon.shield}<h1>Heresy Muster</h1></div></div></div>
+  <main class="wrap">
+    <section class="hero">
+      <h2>Your army lists</h2>
+      <p>Horus Heresy 3rd edition lists built on the community data, frozen at one version so the rules text stays as it was.</p>
+    </section>
+    <div class="row"><a class="btn primary" href="#new">New list</a>
+      <label class="btn ghost" for="import-file">Open a list file</label><input id="import-file" type="file" accept=".json,application/json" hidden></div>
+    <div class="lists">
+      ${lists.length ? lists.map(l => `
+        <button class="list-card" data-act="open" data-id="${esc(l.id)}">
+          <span class="name">${esc(l.name)}</span>
+          <span class="meta">${esc(facName(l.catalogueId))} · ${new Date(l.updated || l.created).toLocaleDateString()}</span>
+          <span class="pts">${esc(l.limits?.[POINTS_ID] ?? '')} pts</span>
+        </button>`).join('') : `<div class="empty">No lists yet. Start one with <strong>New list</strong>, or open a list a friend sent you.</div>`}
+    </div>
+    <div class="footnote">
+      Data: <a href="https://github.com/${DATA_REPO}/tree/${DATA_COMMIT}" target="_blank" rel="noopener">${DATA_REPO}</a>
+      at commit <code>${DATA_COMMIT.slice(0, 7)}</code> (${DATA_DATE}). Lists are saved in this browser only.
+      <div class="row" style="margin-top:10px"><button class="btn small ghost" data-act="clear-cache">Re-download data</button></div>
+    </div>
+  </main>`;
+  document.getElementById('import-file').addEventListener('change', importFile);
+}
+
+async function importFile(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  try {
+    const raw = JSON.parse(await file.text());
+    if (!raw.forces || !raw.catalogueId) throw new Error('not a list');
+    if (loadLists().some(l => l.id === raw.id)) raw.id = raw.id + '-' + Math.random().toString(36).slice(2, 6);
+    upsertList(raw);
+    location.hash = 'list-' + raw.id;
+  } catch {
+    toast('That file is not a Heresy Muster list');
+  }
+}
+
+// ---------- new list ----------
+function renderNew() {
+  const defaultFaction = FACTIONS.find(f => f.name.includes('Ultramarines'))?.id || FACTIONS[0].id;
+  app.innerHTML = `
+  <div class="bar"><div class="wrap"><a class="icon-btn" href="#" aria-label="Back">${icon.back}</a><h1>New list</h1></div></div>
+  <main class="wrap" style="padding-block:20px">
+    <form id="new-form">
+      <div class="field"><label for="nl-name">Name</label><input id="nl-name" required value="New army" maxlength="80"></div>
+      <div class="field"><label for="nl-fac">Faction</label>
+        <select id="nl-fac">${FACTIONS.map(f => `<option value="${f.id}" ${f.id === defaultFaction ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="nl-pts">Points limit</label><input id="nl-pts" type="number" inputmode="numeric" min="0" step="50" value="${DEFAULT_POINTS}"></div>
+      <div class="field"><label for="nl-force">Army type</label>
+        <select id="nl-force"><option value="crusade">Crusade Force Organization Chart</option><option value="zm">Zone Mortalis</option><option value="none">Start empty</option></select></div>
+      <button class="btn primary" type="submit">Create list</button>
+    </form>
+  </main>`;
+  document.getElementById('new-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const raw = newRosterRaw({
+      name: document.getElementById('nl-name').value.trim() || 'New army',
+      catalogueId: document.getElementById('nl-fac').value,
+      gameSystemId: GS.id,
+      points: Number(document.getElementById('nl-pts').value) || 0,
+    });
+    const kind = document.getElementById('nl-force').value;
+    try { await ensureData([raw.catalogueId]); } catch (err) { return showError(err); }
+    const r = new Roster(data, raw);
+    const choice = r.childForceChoices(r.root).find(c => kind === 'zm' ? c.node.name === 'Zone Mortalis' : c.node.name.startsWith('Crusade'));
+    if (kind !== 'none' && choice) r.addForce(r.root, choice.node);
+    upsertList(raw);
+    location.hash = 'list-' + raw.id;
+  });
+}
+
+// ---------- roster view ----------
+function rootUnitOf(obj) {
+  let s = obj;
+  while (s && s.kind === 'sel' && s.parent?.kind === 'sel') s = s.parent;
+  return s;
+}
+
+function issuesFor(obj) {
+  return issues.filter(i => i.where && (i.where === obj || rootUnitOf(i.where) === obj));
+}
+
+function slotChips(f) {
+  const out = [];
+  for (const s of roster.slots(f)) {
+    if (s.state.hidden) continue;
+    let max = -1, min = 0, n = 0;
+    for (const c of s.state.constraints) {
+      if ((c.field || 'selections') !== 'selections') continue;
+      const cnt = roster.count({ ...c, childId: c.owner }, { self: null, parent: f, force: f });
+      if (c.type === 'max') { max = c.value; n = cnt; }
+      if (c.type === 'min') { min = c.value; n = Math.max(n, cnt); }
+    }
+    if (n === 0 && max === 0) continue;
+    if (n === 0 && max < 0 && min === 0) continue;
+    const cls = max >= 0 && n > max ? 'over' : n < min ? 'need' : (max >= 0 && n === max ? 'full' : '');
+    out.push(`<span class="slot ${cls}" title="${esc(s.state.name)}">${esc(s.state.name)} ${n}${max >= 0 ? '/' + max : ''}</span>`);
+  }
+  return out.join('');
+}
+
+function unitSummary(sel) {
+  const parts = [];
+  for (const c of sel.children) {
+    const st = roster.selState(c);
+    if (c.node.type === 'model') parts.push(`${c.number}× ${st.name}`);
+  }
+  if (!parts.length) {
+    for (const c of sel.children.slice(0, 4)) parts.push(roster.selState(c).name);
+  }
+  return parts.join(', ');
+}
+
+function renderForce(f, depth) {
+  const st = roster.forceState(f);
+  const units = f.sels.map(s => {
+    const st2 = roster.selState(s);
+    const iss = issuesFor(s);
+    const cls = iss.some(i => i.level === 'error') ? 'has-err' : iss.length ? 'has-warn' : '';
+    const cat = st2.primary ? data.categoryName(st2.primary, f.catalogueId) : '';
+    return `<button class="unit ${cls}" data-act="unit" data-uid="${s.uid}">
+      <span class="uname">${s.number > 1 ? s.number + '× ' : ''}${esc(st2.name)}</span>
+      <span class="upts">${pts(roster.selTotal(s, POINTS_ID))}</span>
+      <span class="usub">${esc(unitSummary(s))}</span>
+      <span class="ucat">${esc(cat)}</span></button>`;
+  }).join('');
+  const canAddUnits = roster.slots(f).some(s => !s.state.hidden);
+  const kids = f.node?.childForces().length;
+  const forceIssues = issues.filter(i => i.where === f);
+  const foreign = f.catalogueId !== roster.raw.catalogueId && f.parent.kind === 'roster' ? ` · ${esc(data.catalogueName(f.catalogueId))}` : '';
+  const ck = 'rmf-' + f.uid;
+  return `<section class="force ${depth ? 'child' : ''}">
+    <header><h3>${esc(st?.name || f.name)}${foreign}</h3><span class="fpts">${pts(roster.forceTotal(f))} pts</span>
+      <button class="icon-btn" data-act="force-menu" data-uid="${f.uid}" aria-label="Remove ${esc(f.name)}">${icon.close}</button></header>
+    ${confirmKey === ck ? `<div class="confirm">Remove ${esc(f.name)} and everything in it? <div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-force" data-uid="${f.uid}">Remove</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : ''}
+    <div class="slots">${slotChips(f)}</div>
+    ${forceIssues.length ? `<div class="msgs">${forceIssues.slice(0, 6).map(i => `<div class="msg ${i.level}">${esc(i.msg)}</div>`).join('')}${forceIssues.length > 6 ? `<div class="hint">and ${forceIssues.length - 6} more in the issues list</div>` : ''}</div>` : ''}
+    ${units}
+    <div class="row force-actions">
+      ${canAddUnits ? `<button class="btn small" data-act="add-unit" data-uid="${f.uid}">Add unit</button>` : ''}
+      ${kids ? `<button class="btn small ghost" data-act="add-det" data-uid="${f.uid}">Add detachment</button>` : ''}
+    </div>
+    ${f.forces.length ? `<div class="children">${f.forces.map(cf => renderForce(cf, depth + 1)).join('')}</div>` : ''}
+  </section>`;
+}
+
+function render() {
+  if (!roster) return;
+  const total = roster.total();
+  const limit = roster.raw.limits[POINTS_ID] || 0;
+  const errs = issues.filter(i => i.level === 'error').length;
+  const warns = issues.length - errs;
+  app.innerHTML = `
+  <div class="bar"><div class="wrap">
+    <a class="icon-btn" href="#" aria-label="All lists">${icon.back}</a>
+    <h1>${esc(roster.raw.name)}</h1>
+    <span class="points ${limit && total > limit ? 'over' : ''}">${pts(total)}${limit ? '/' + limit : ''}</span>
+    <button class="chip-err ${errs ? '' : 'ok'}" data-act="issues">${errs ? errs + ' issue' + (errs > 1 ? 's' : '') : warns ? warns + ' note' + (warns > 1 ? 's' : '') : 'Valid'}</button>
+    <button class="icon-btn" data-act="list-menu" aria-label="List options">${icon.menu}</button>
+  </div></div>
+  <main class="wrap">
+    <p class="hint" style="margin-top:12px">${esc(data.catalogueName(roster.raw.catalogueId))}</p>
+    ${roster.root.forces.map(f => renderForce(f, 0)).join('')}
+    <div class="row" style="margin-block:22px 60px"><button class="btn" data-act="add-top">Add force</button></div>
+  </main>`;
+  renderSheet();
+}
+
+// ---------- sheets ----------
+function openSheet(s) { sheet = s; renderSheet(); }
+function closeSheet(rerender = true) {
+  sheet = null; sheetRoot.innerHTML = '';
+  document.body.style.overflow = '';
+  if (rerender && roster) render();
+}
+
+function renderSheet() {
+  if (!sheet) { sheetRoot.innerHTML = ''; document.body.style.overflow = ''; return; }
+  document.body.style.overflow = 'hidden';
+  let title = '', body = '', head = '';
+  try {
+    ({ title, body, head = '' } = sheetContent());
+  } catch (e) {
+    console.error(e);
+    title = 'Something went wrong'; body = `<p>${esc(e.message)}</p>`;
+  }
+  if (title === null) { closeSheet(); return; }
+  const prevScroll = sheetRoot.querySelector('.sheet-body')?.scrollTop || 0;
+  const sameSheet = sheetRoot.dataset.key === sheetKey();
+  sheetRoot.innerHTML = `<div class="scrim" data-act="close-sheet"></div>
+   <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}" ${sameSheet ? 'style="animation:none"' : ''}>
+     <div class="sheet-head">${sheet.back ? `<button class="icon-btn" data-act="sheet-back" aria-label="Back">${icon.back}</button>` : ''}<h2>${esc(title)}</h2>${head}<button class="icon-btn" data-act="close-sheet" aria-label="Close">${icon.close}</button></div>
+     <div class="sheet-body">${body}</div></div>`;
+  sheetRoot.dataset.key = sheetKey();
+  const sb = sheetRoot.querySelector('.sheet-body');
+  if (sameSheet) sb.scrollTop = prevScroll;
+  const search = sheetRoot.querySelector('.search');
+  if (search) {
+    search.value = sheet.q || '';
+    search.addEventListener('input', () => { sheet.q = search.value; filterPicks(search.value); });
+    filterPicks(search.value);
+  }
+}
+
+function sheetKey() { return sheet ? sheet.type + ':' + (sheet.uid || '') + ':' + (sheet.ruleKey || '') : ''; }
+
+function filterPicks(q) {
+  q = q.trim().toLowerCase();
+  for (const g of sheetRoot.querySelectorAll('.pick-group')) {
+    let any = false;
+    for (const p of g.querySelectorAll('.pick')) {
+      const hit = !q || p.dataset.name.includes(q);
+      p.hidden = !hit; any ||= hit;
+    }
+    g.hidden = !any;
+  }
+}
+
+function findSel(uid) { return roster.allSels.find(s => s.uid === uid); }
+function findForce(uid) { return roster.allForces.find(f => f.uid === uid); }
+
+function sheetContent() {
+  switch (sheet.type) {
+    case 'add-unit': return addUnitSheet();
+    case 'add-det': return addDetSheet();
+    case 'add-top': return addTopSheet();
+    case 'unit': return unitSheet();
+    case 'rule': return ruleSheet();
+    case 'issues': return issuesSheet();
+    case 'list-menu': return listMenuSheet();
+    case 'export': return exportSheet();
+  }
+  return { title: null };
+}
+
+function addUnitSheet() {
+  const f = findForce(sheet.uid);
+  if (!f) return { title: null };
+  const choices = roster.rootChoices(f);
+  const order = roster.slots(f).map(s => s.categoryId);
+  const groups = new Map();
+  for (const c of choices) {
+    if (!groups.has(c.categoryId)) groups.set(c.categoryId, []);
+    groups.get(c.categoryId).push(c);
+  }
+  const keys = [...groups.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const body = `<input class="search" type="search" placeholder="Search units" aria-label="Search units">
+    ${keys.map(k => `<div class="pick-group"><h4>${esc(data.categoryName(k, f.catalogueId))}</h4>
+      ${groups.get(k).sort((a, b) => a.state.name.localeCompare(b.state.name)).map(c => {
+        const cost = c.state.costs.get(POINTS_ID);
+        return `<button class="pick" data-act="pick-unit" data-key="${esc(c.node.key)}" data-name="${esc(c.state.name.toLowerCase())}"><span>${esc(c.state.name)}</span><span class="pp">${cost ? pts(cost) : ''}</span></button>`;
+      }).join('')}</div>`).join('') || '<p class="hint">Nothing can be added here with the current choices.</p>'}`;
+  return { title: 'Add to ' + f.name, body };
+}
+
+function addDetSheet() {
+  const f = findForce(sheet.uid);
+  if (!f) return { title: null };
+  const choices = roster.childForceChoices(f);
+  const body = `<input class="search" type="search" placeholder="Search detachments" aria-label="Search detachments">
+    <div class="pick-group">${choices.map(c => `<button class="pick" data-act="pick-det" data-key="${esc(c.node.key)}" data-name="${esc(c.state.name.toLowerCase())}"><span>${esc(c.state.name)}</span><span class="pp"></span></button>`).join('')}</div>`;
+  return { title: 'Add detachment', body };
+}
+
+function addTopSheet() {
+  const choices = roster.childForceChoices(roster.root);
+  const cur = sheet.cat || roster.raw.catalogueId;
+  const body = `<div class="field"><label for="top-cat">Faction for this force</label>
+    <select id="top-cat" data-act-change="top-cat">${FACTIONS.map(f => `<option value="${f.id}" ${f.id === cur ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select>
+    <span class="hint">Pick a different faction for an allied detachment.</span></div>
+    <div class="pick-group">${choices.map(c => `<button class="pick" data-act="pick-top" data-key="${esc(c.node.key)}" data-name="${esc(c.state.name.toLowerCase())}"><span>${esc(c.state.name)}</span></button>`).join('')}</div>`;
+  return { title: 'Add force', body };
+}
+
+function costLabel(st, number = 1) {
+  const c = st.costs.get(POINTS_ID);
+  return c ? `${c > 0 ? '+' : ''}${pts(c * number)}` : '';
+}
+
+function limitText(l) {
+  if (l.max < 0 && !l.min) return '';
+  if (l.min === l.max) return `${l.min}`;
+  if (l.max < 0) return `${l.min}+`;
+  return `${l.min}–${l.max}`;
+}
+
+// Render the options under a parent selection.
+function renderOptions(parent, depth = 0) {
+  const items = roster.options(parent);
+  return `<div class="opts">${renderItems(parent, items, depth, null)}</div>`;
+}
+
+function renderItems(parent, items, depth, radioGroup) {
+  return items.map(it => {
+    const visible = !it.state.hidden || it.count > 0;
+    if (!visible) return '';
+    return it.kind === 'group' ? renderGroup(parent, it, depth) : renderEntry(parent, it, depth, radioGroup);
+  }).join('');
+}
+
+function itemId(parent, it) { return parent.uid + ':' + it.groups.map(g => g.key).join('/') + '/' + it.node.key; }
+
+function renderGroup(parent, it, depth) {
+  const l = roster.limitsOf(it.state);
+  const direct = it.children.filter(c => !c.state.hidden || c.count > 0);
+  const radio = l.max === 1 && direct.length > 1 && direct.every(c => c.kind === 'entry');
+  const gid = itemId(parent, it);
+  let inner;
+  if (radio) {
+    const none = l.min === 0 ? `<div class="opt"><label><input type="radio" name="${esc(gid)}" data-act="radio" data-parent="${parent.uid}" data-group="${esc(gid)}" data-item="" ${it.count === 0 ? 'checked' : ''}><span class="oname">None</span></label></div>` : '';
+    inner = none + renderItems(parent, it.children, depth, gid);
+  } else {
+    inner = renderItems(parent, it.children, depth, null);
+  }
+  if (!inner.trim()) return '';
+  const lt = limitText(l);
+  return `<fieldset class="ogroup"><legend>${esc(it.state.name)}${lt ? `<span class="lim">${lt}</span>` : ''}</legend>${inner}</fieldset>`;
+}
+
+function renderEntry(parent, it, depth, radioGroup) {
+  const l = roster.limitsOf(it.state);
+  const id = itemId(parent, it);
+  const name = esc(it.state.name);
+  const hiddenCls = it.state.hidden ? 'hiddenopt' : '';
+  let control;
+  if (radioGroup) {
+    control = `<label><input type="radio" name="${esc(radioGroup)}" data-act="radio" data-parent="${parent.uid}" data-group="${esc(radioGroup)}" data-item="${esc(id)}" ${it.count > 0 ? 'checked' : ''}><span class="oname">${name}</span></label>`;
+  } else if (l.max === 1 && it.node.type !== 'model') {
+    const locked = l.min >= 1 && it.count >= 1;
+    control = `<label><input type="checkbox" data-act="check" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count > 0 ? 'checked' : ''} ${locked ? 'disabled' : ''}><span class="oname">${name}</span></label>`;
+  } else {
+    const max = l.max;
+    control = `<label><span class="oname">${name}</span></label>
+      <span class="stepper"><button data-act="step" data-d="-1" data-parent="${parent.uid}" data-item="${esc(id)}" ${it.count <= 0 ? 'disabled' : ''} aria-label="Fewer ${name}">−</button><output>${it.count}</output><button data-act="step" data-d="1" data-parent="${parent.uid}" data-item="${esc(id)}" ${max >= 0 && it.count >= max ? 'disabled' : ''} aria-label="More ${name}">+</button></span>`;
+  }
+  const cost = costLabel(it.state);
+  let html = `<div class="opt ${hiddenCls}">${control}<span class="ocost">${cost}</span></div>`;
+  // Nested options of the chosen entry (e.g. a model's wargear).
+  if (depth < 4) {
+    for (const s of it.sels || []) {
+      const sub = roster.options(s);
+      const hasVisible = sub.some(x => !x.state.hidden || x.count > 0);
+      if (!hasVisible) continue;
+      const many = s.number > 1;
+      html += `<div class="sub"><div class="sub-title"><span class="grow">${esc(roster.selState(s).name)}${many ? ` ×${s.number}` : ''}</span>
+        ${many ? `<button class="btn small ghost" data-act="split" data-uid="${s.uid}">Change one</button>` : ''}
+        ${(it.sels.length > 1) ? `<button class="btn small ghost danger" data-act="rm-sel" data-uid="${s.uid}">Remove</button>` : ''}</div>
+        ${many ? `<div class="hint">Choices here apply to all ${s.number}.</div>` : ''}
+        ${renderOptions(s, depth + 1)}</div>`;
+    }
+  }
+  return html;
+}
+
+function findItem(parentUid, itemKey) {
+  const parent = findSel(parentUid);
+  if (!parent) return {};
+  let hit = null;
+  const walk = (items) => { for (const it of items) { if (itemId(parent, it) === itemKey) hit = it; if (it.children) walk(it.children); } };
+  walk(roster.options(parent));
+  return { parent, item: hit };
+}
+
+function collectInfo(sel) {
+  const profiles = new Map(), rules = new Map();
+  const walk = (s) => {
+    const info = roster.infoFor(s);
+    for (const p of info.profiles) {
+      const key = p.view.name + '|' + (p.obj.typeName || '');
+      if (!profiles.has(key)) profiles.set(key, p);
+    }
+    for (const r of info.rules) if (!rules.has(r.view.name)) rules.set(r.view.name, r);
+    s.children.forEach(walk);
+  };
+  walk(sel);
+  return { profiles: [...profiles.values()], rules: [...rules.values()] };
+}
+
+function renderProfiles(list) {
+  const byType = new Map();
+  for (const p of list) {
+    const t = p.obj.typeName || 'Profile';
+    if (!byType.has(t)) byType.set(t, []);
+    byType.get(t).push(p);
+  }
+  let html = '';
+  for (const [type, ps] of byType) {
+    const long = ps.some(p => p.view.chars.some(c => String(c.value).length > 40)) || ps[0].view.chars.length <= 2;
+    if (long) {
+      html += ps.map(p => `<div class="longprof"><h4>${esc(p.view.name)} <span class="hint">· ${esc(type)}</span></h4><dl>${p.view.chars.filter(c => c.value !== '').map(c => `<dt>${esc(c.name)}</dt><dd>${richText(c.value)}</dd>`).join('')}</dl></div>`).join('');
+      continue;
+    }
+    const cols = ps[0].view.chars.map(c => c.name);
+    html += `<div class="table-scroll"><table class="stats"><thead><tr><th>${esc(type)}</th>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+      ${ps.map(p => `<tr><td>${esc(p.view.name)}</td>${cols.map(cn => { const v = p.view.chars.find(c => c.name === cn)?.value ?? ''; const long = String(v).length > 14 || (String(v).length > 6 && /[a-z]{3}/i.test(v));
+          return `<td class="${long ? 'wrap' : ''}">${esc(v)}</td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div>`;
+  }
+  return html;
+}
+
+function unitSheet() {
+  const sel = findSel(sheet.uid);
+  if (!sel) return { title: null };
+  const st = roster.selState(sel);
+  const iss = issuesFor(sel);
+  const info = collectInfo(sel);
+  const ck = 'rmu-' + sel.uid;
+  sheet.rules = info.rules;
+  const body = `
+    <div class="ustat"><span class="points">${pts(roster.selTotal(sel, POINTS_ID))} pts</span>
+      <span class="hint">${esc(st.primary ? data.categoryName(st.primary, sel.force.catalogueId) : '')} · ${esc(sel.force.name)}</span></div>
+    ${iss.length ? `<div class="msgs">${iss.map(i => `<div class="msg ${i.level}">${esc(i.msg)}</div>`).join('')}</div>` : ''}
+    ${renderOptions(sel)}
+    <h3 class="sec">Profiles</h3>${renderProfiles(info.profiles) || '<p class="hint">No profiles.</p>'}
+    <h3 class="sec">Rules</h3><div class="rules">${info.rules.map((r, i) => `<button class="rule-chip" data-act="rule" data-i="${i}">${esc(r.view.name)}</button>`).join('') || '<span class="hint">No rules listed.</span>'}</div>
+    <h3 class="sec">Unit</h3>
+    ${confirmKey === ck ? `<div class="confirm">Remove ${esc(st.name)}?<div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-unit" data-uid="${sel.uid}">Remove</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : ''}
+    <div class="row"><button class="btn small" data-act="dup" data-uid="${sel.uid}">Duplicate</button><button class="btn small danger" data-act="ask-rm-unit" data-uid="${sel.uid}">Remove</button></div>`;
+  return { title: st.name, body };
+}
+
+function ruleSheet() {
+  const r = sheet.rule;
+  const pub = r.obj.publicationId ? data.resolve(r.obj.publicationId, roster?.raw.catalogueId) : null;
+  const src = [pub?.shortName || pub?.name, r.view.page ? 'p. ' + r.view.page : ''].filter(Boolean).join(', ');
+  const body = `<div class="ruletext">${richText(r.view.description || 'No text in the data for this rule.')}${src ? `<p class="src">${esc(src)}</p>` : ''}</div>`;
+  return { title: r.view.name, body };
+}
+
+function issuesSheet() {
+  const body = issues.length ? `<div class="msgs">${issues.map((i, n) => `<button class="msg ${i.level}" data-act="goto-issue" data-i="${n}">${esc(i.msg)}${i.where ? `<div class="hint">${esc(i.where.kind === 'sel' ? roster.selState(rootUnitOf(i.where)).name : i.where.name || '')}</div>` : ''}</button>`).join('')}</div>` : '<p>No problems found. This list follows every rule the data checks.</p>';
+  return { title: 'Issues', body };
+}
+
+function listMenuSheet() {
+  const limit = roster.raw.limits[POINTS_ID] || 0;
+  const ck = 'rml';
+  const body = `
+    <div class="field"><label for="lm-name">List name</label><input id="lm-name" value="${esc(roster.raw.name)}" maxlength="80"></div>
+    <div class="field"><label for="lm-pts">Points limit</label><input id="lm-pts" type="number" inputmode="numeric" min="0" step="50" value="${limit}"></div>
+    <div class="row"><button class="btn primary" data-act="save-meta">Save</button></div>
+    <h3 class="sec">Share</h3>
+    <div class="row"><button class="btn" data-act="export-text">Copy as text</button><button class="btn" data-act="share-link">Copy share link</button><button class="btn" data-act="download">Download list file</button></div>
+    <p class="hint">A share link carries the whole list. Anyone who opens it gets their own copy.</p>
+    <h3 class="sec">Delete</h3>
+    ${confirmKey === ck ? `<div class="confirm">Delete this list for good?<div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-list">Delete</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : `<button class="btn danger" data-act="ask-rm-list">Delete list</button>`}`;
+  return { title: 'List options', body };
+}
+
+function exportSheet() {
+  return { title: 'List as text', body: `<textarea class="export" readonly>${esc(rosterText(roster))}</textarea><div class="row" style="margin-top:10px"><button class="btn primary" data-act="copy-text">Copy</button></div>` };
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copied'); return true; }
+  catch { return false; }
+}
+
+// ---------- events ----------
+document.addEventListener('click', async (ev) => {
+  const el = ev.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act;
+  if (el.tagName === 'INPUT' || el.tagName === 'SELECT') return; // handled on change
+  const uid = el.dataset.uid;
+  switch (act) {
+    case 'open': location.hash = 'list-' + el.dataset.id; return;
+    case 'reload': route(); return;
+    case 'clear-cache': await clearCache(); toast('Data will download again next time'); return;
+    case 'close-sheet': confirmKey = null; closeSheet(); return;
+    case 'sheet-back': sheet = sheet.back; renderSheet(); return;
+    case 'cancel': confirmKey = null; render(); return;
+    case 'issues': openSheet({ type: 'issues' }); return;
+    case 'list-menu': openSheet({ type: 'list-menu' }); return;
+    case 'add-unit': openSheet({ type: 'add-unit', uid }); return;
+    case 'add-det': openSheet({ type: 'add-det', uid }); return;
+    case 'add-top': openSheet({ type: 'add-top' }); return;
+    case 'unit': confirmKey = null; openSheet({ type: 'unit', uid }); return;
+    case 'force-menu': confirmKey = 'rmf-' + uid; render(); return;
+    case 'rm-force': { const f = findForce(uid); confirmKey = null; if (f) roster.removeForce(f); changed(); return; }
+    case 'pick-unit': {
+      const f = findForce(sheet.uid);
+      const node = roster.rootChoices(f).find(c => c.node.key === el.dataset.key)?.node;
+      if (!node) return;
+      const raw = roster.addRoot(f, node);
+      save(); issues = roster.validate();
+      sheet = { type: 'unit', uid: raw.id };
+      render();
+      return;
+    }
+    case 'pick-det': {
+      const f = findForce(sheet.uid);
+      const c = roster.childForceChoices(f).find(c => c.node.key === el.dataset.key);
+      if (c) roster.addForce(f, c.node);
+      sheet = null; changed(); toast(`Added ${c?.state.name || 'detachment'}`); return;
+    }
+    case 'pick-top': {
+      const cat = sheetRoot.querySelector('#top-cat')?.value || roster.raw.catalogueId;
+      const key = el.dataset.key;
+      sheet = null;
+      try { await ensureData([cat], 'Loading allied faction'); } catch (e) { return showError(e); }
+      roster.refresh();
+      const c = roster.childForceChoices(roster.root).find(c => c.node.key === key);
+      if (c) roster.addForce(roster.root, c.node, cat);
+      changed(); return;
+    }
+    case 'step': {
+      const { parent, item } = findItem(el.dataset.parent, el.dataset.item);
+      if (!item) return;
+      roster.setOptionCount(parent, item, Math.max(0, item.count + Number(el.dataset.d)));
+      changed(); return;
+    }
+    case 'split': { const s = findSel(uid); if (s) roster.splitOne(s); changed(); return; }
+    case 'rm-sel': { const s = findSel(uid); if (s) roster.removeSel(s); changed(); return; }
+    case 'dup': { const s = findSel(uid); if (s) { const raw = roster.duplicate(s); sheet = { type: 'unit', uid: raw.id }; toast('Duplicated'); } changed(); return; }
+    case 'ask-rm-unit': confirmKey = 'rmu-' + uid; renderSheet(); return;
+    case 'rm-unit': { const s = findSel(uid); confirmKey = null; if (s) roster.removeSel(s); sheet = null; changed(); return; }
+    case 'rule': {
+      const r = sheet.rules[Number(el.dataset.i)];
+      openSheet({ type: 'rule', rule: r, ruleKey: r.view.name, back: sheet });
+      return;
+    }
+    case 'goto-issue': {
+      const i = issues[Number(el.dataset.i)];
+      const u = i?.where?.kind === 'sel' ? rootUnitOf(i.where) : null;
+      if (u) openSheet({ type: 'unit', uid: u.uid }); else closeSheet();
+      return;
+    }
+    case 'save-meta': {
+      roster.raw.name = sheetRoot.querySelector('#lm-name').value.trim() || roster.raw.name;
+      roster.raw.limits[POINTS_ID] = Number(sheetRoot.querySelector('#lm-pts').value) || 0;
+      roster.refresh(); sheet = null; changed(); toast('Saved'); return;
+    }
+    case 'export-text': openSheet({ type: 'export', back: sheet }); return;
+    case 'copy-text': {
+      const ta = sheetRoot.querySelector('textarea.export');
+      if (!(await copy(ta.value))) { ta.focus(); ta.select(); toast('Select all and copy'); }
+      return;
+    }
+    case 'share-link': {
+      const code = await encodeShare(roster.raw);
+      const url = location.href.split('#')[0] + '#r=' + code;
+      if (!(await copy(url))) {
+        openSheet({ type: 'export', back: sheet });
+        const ta = sheetRoot.querySelector('textarea.export'); ta.value = url; ta.select();
+      }
+      return;
+    }
+    case 'download': {
+      const blob = new Blob([JSON.stringify(roster.raw, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (roster.raw.name || 'army').replace(/[^\w\- ]+/g, '') + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      return;
+    }
+    case 'ask-rm-list': confirmKey = 'rml'; renderSheet(); return;
+    case 'rm-list': deleteList(roster.raw.id); confirmKey = null; sheet = null; location.hash = ''; return;
+  }
+});
+
+document.addEventListener('change', (ev) => {
+  const el = ev.target;
+  const act = el.dataset.act;
+  if (act === 'check') {
+    const { parent, item } = findItem(el.dataset.parent, el.dataset.item);
+    if (!item) return;
+    roster.setOptionCount(parent, item, el.checked ? 1 : 0);
+    changed();
+  } else if (act === 'radio') {
+    const { parent, item: group } = findItem(el.dataset.parent, el.dataset.group);
+    if (!group) return;
+    const item = el.dataset.item ? findItem(el.dataset.parent, el.dataset.item).item : null;
+    roster.chooseInGroup(parent, group, item);
+    changed();
+  } else if (el.dataset.actChange === 'top-cat') {
+    sheet.cat = el.value;
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && sheet) { confirmKey = null; closeSheet(); }
+});
+
+window.addEventListener('hashchange', route);
+route();
