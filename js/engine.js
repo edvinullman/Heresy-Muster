@@ -455,12 +455,15 @@ export class Roster {
     if (this.cache.has(key)) return this.cache.get(key);
     const out = [];
     for (const cl of f.node?.categoryLinks() || []) {
+      // A slot is hidden if its category is hidden by default or the link hides it;
+      // modifiers on either can switch it back on.
+      const cat = this.data.resolve(cl.targetId, f.catalogueId);
       const pseudo = {
-        name: this.data.categoryName(cl.targetId, f.catalogueId),
-        hiddenBase: !!cl.hidden,
+        name: cat?.name || cl.targetId,
+        hiddenBase: !!(cl.hidden || cat?.hidden),
         ids: [cl.targetId], key: cl.id, link: null, target: cl,
-        constraints: () => (cl.constraints || []).map(c => ({ ...c, owner: cl.targetId })),
-        modifiers: () => (cl.modifiers || []).map(m => ({ mod: m, groups: [] })),
+        constraints: () => [...(cat?.constraints || []), ...(cl.constraints || [])].map(c => ({ ...c, owner: cl.targetId })),
+        modifiers: () => [...(cat?.modifiers || []), ...(cl.modifiers || [])].map(m => ({ mod: m, groups: [] })),
         costs: () => new Map(), categoryLinks: () => [],
         type: 'category',
       };
