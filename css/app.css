@@ -270,8 +270,9 @@ a.btn, a.icon-btn { text-decoration: none; }
    main.js sets .hovering with a short grace period, so the mouse can travel onto it. */
 .opt.has-wp.hovering { z-index: 6; }
 .opt.has-wp.hovering .wprof:not(.open) {
-  display: grid; gap: 4px; position: absolute; z-index: 5; top: calc(100% - 4px); left: 0; right: 0;
-  box-shadow: var(--shadow); border: 1px solid var(--line);
+  /* Sits under the right part of the row, leaving the option names free to browse. */
+  display: grid; gap: 4px; position: absolute; z-index: 5; top: calc(100% - 4px); left: 40%; right: 0; margin: 0;
+  box-shadow: var(--shadow); border: 1px solid var(--brass);
 }
 .wp-line { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
 .wp-stat { font: .85rem var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }

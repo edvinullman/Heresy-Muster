@@ -997,8 +997,9 @@ if (window.matchMedia('(hover: hover)').matches) {
     if (row === hoverRow) { clearTimeout(hoverClose); clearTimeout(hoverOpen); return; }
     clearTimeout(hoverOpen);
     if (row) {
-      // Switch rows only if the pointer settles there, not when it brushes past.
-      hoverOpen = setTimeout(() => { clearTimeout(hoverClose); setHover(row); }, hoverRow ? 220 : 60);
+      // Browsing down the names switches almost at once; the short delay only lets a
+      // diagonal move toward the profile pass over the next name without switching.
+      hoverOpen = setTimeout(() => { clearTimeout(hoverClose); setHover(row); }, hoverRow ? 110 : 40);
     }
     if (hoverRow && !row) {
       clearTimeout(hoverClose);
