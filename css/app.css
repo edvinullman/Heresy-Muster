@@ -266,15 +266,12 @@ a.btn, a.icon-btn { text-decoration: none; }
 .winfo[aria-expanded="true"] { border-color: var(--brass); color: var(--brass); }
 .wprof { display: none; flex-basis: 100%; margin: 2px 0 2px 30px; padding: 6px 10px; border-radius: 6px; background: var(--surface-2); font-size: .82rem; }
 .wprof.open { display: grid; gap: 4px; }
-/* On hover, float the profile over the list so nothing below moves. */
-@media (hover: hover) {
-  .opt.has-wp:hover .wprof:not(.open) {
-    display: grid; gap: 4px; position: absolute; z-index: 5; top: calc(100% - 2px); left: 0; right: 0;
-    box-shadow: var(--shadow); border: 1px solid var(--line);
-  }
-  /* The floating profile belongs to its row, so moving onto it keeps it open
-     (and covers the row below) and its rule names can be clicked. */
-  .opt.has-wp:hover { z-index: 6; }
+/* On hover, float the profile over the list so nothing below moves.
+   main.js sets .hovering with a short grace period, so the mouse can travel onto it. */
+.opt.has-wp.hovering { z-index: 6; }
+.opt.has-wp.hovering .wprof:not(.open) {
+  display: grid; gap: 4px; position: absolute; z-index: 5; top: calc(100% - 4px); left: 0; right: 0;
+  box-shadow: var(--shadow); border: 1px solid var(--line);
 }
 .wp-line { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
 .wp-stat { font: .85rem var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }

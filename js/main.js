@@ -982,7 +982,29 @@ const tip = document.createElement('div');
 tip.className = 'rule-tip'; tip.hidden = true; tip.setAttribute('role', 'tooltip');
 document.body.appendChild(tip);
 function hideTip() { tip.hidden = true; }
+// Floating weapon profiles: show after a short pause on a row, and keep showing
+// for a moment after the mouse leaves, so it can travel onto the profile.
+let hoverRow = null, hoverOpen = null, hoverClose = null;
+function setHover(row) {
+  if (hoverRow === row) return;
+  hoverRow?.classList.remove('hovering');
+  hoverRow = row;
+  row?.classList.add('hovering');
+}
 if (window.matchMedia('(hover: hover)').matches) {
+  document.addEventListener('mouseover', (e) => {
+    const row = e.target.closest('.opt.has-wp');
+    if (row === hoverRow) { clearTimeout(hoverClose); clearTimeout(hoverOpen); return; }
+    clearTimeout(hoverOpen);
+    if (row) {
+      // Switch rows only if the pointer settles there, not when it brushes past.
+      hoverOpen = setTimeout(() => { clearTimeout(hoverClose); setHover(row); }, hoverRow ? 220 : 60);
+    }
+    if (hoverRow && !row) {
+      clearTimeout(hoverClose);
+      hoverClose = setTimeout(() => setHover(null), 350);
+    }
+  });
   document.addEventListener('mouseover', (e) => {
     const el = e.target.closest('.rule-link');
     if (!el) { hideTip(); return; }
