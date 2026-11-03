@@ -273,9 +273,10 @@ a.btn, a.icon-btn { text-decoration: none; }
     box-shadow: var(--shadow); border: 1px solid var(--line); pointer-events: none;
   }
 }
-.wp-line { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
-.wp-stat { font: .8rem var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.wp-stat b { color: var(--muted); font-weight: 600; margin-right: 2px; }
+.wp-line { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
+.wp-stat { font: .85rem var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wp-stat b { color: var(--muted); font-weight: 500; font-size: .74rem; margin-right: 3px; }
+.wp-val { font-weight: 700; color: var(--fg); }
 .wp-name { font-weight: 600; margin-right: 4px; }
 .wp-who { font-weight: 600; color: var(--brass); margin-right: 4px; }
 .wp-rules { color: var(--muted); }

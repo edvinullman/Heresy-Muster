@@ -539,7 +539,7 @@ function weaponSummary(parent, it) {
     .filter(p => !p.view.hidden);
   if (!profs.length) return '';
   const fmtChars = (chars) => chars.filter(c => c.value !== '')
-    .map(c => /special|trait/i.test(c.name) ? (c.value && c.value !== '-' ? `<span class="wp-rules">${esc(c.value)}</span>` : '') : `<span class="wp-stat"><b>${esc(c.name)}</b> ${esc(c.value)}</span>`)
+    .map(c => /special|trait/i.test(c.name) ? (c.value && c.value !== '-' ? `<span class="wp-rules">${esc(c.value)}</span>` : '') : `<span class="wp-stat"><b>${esc(c.name)}</b><span class="wp-val">${esc(c.value)}</span></span>`)
     .join('');
   const lines = [];
   const holders = carriers(parent);
