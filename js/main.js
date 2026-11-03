@@ -534,7 +534,10 @@ function renderProfiles(list) {
   }
   let html = '';
   for (const [type, ps] of byType) {
-    const long = ps.some(p => p.view.chars.some(c => String(c.value).length > 40)) || ps[0].view.chars.length <= 2;
+    // Stat lines (weapons, units, vehicles) stay tables; long cells wrap.
+    // Only text-style profiles (few fields, or paragraphs of rules) become cards.
+    const nChars = ps[0].view.chars.length;
+    const long = nChars <= 2 || ps.some(p => p.view.chars.some(c => String(c.value).length > 150));
     if (long) {
       html += ps.map(p => `<div class="longprof"><h4>${esc(p.view.name)} <span class="hint">· ${esc(type)}</span></h4><dl>${p.view.chars.filter(c => c.value !== '').map(c => `<dt>${esc(c.name)}</dt><dd>${richText(c.value)}</dd>`).join('')}</dl></div>`).join('');
       continue;

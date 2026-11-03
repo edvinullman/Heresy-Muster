@@ -211,7 +211,7 @@ table.stats th, table.stats td { padding: 6px 8px; text-align: center; border-bo
 table.stats th { background: var(--surface-2); font-weight: 600; font-size: .72rem; letter-spacing: .03em; }
 table.stats th:first-child, table.stats td:first-child { text-align: left; font-family: var(--font-body); font-weight: 600; white-space: normal; min-width: 9em; }
 table.stats td.txt { font-family: var(--font-body); }
-table.stats td.wrap { white-space: normal; text-align: left; min-width: 12em; font-family: var(--font-body); }
+table.stats td.wrap { white-space: normal; text-align: left; min-width: 11em; font-family: var(--font-body); }
 table.stats tr:last-child td { border-bottom: 0; }
 
 .longprof { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
