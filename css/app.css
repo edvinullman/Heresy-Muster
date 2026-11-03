@@ -240,3 +240,15 @@ textarea.export { width: 100%; min-height: 50vh; font: .85rem/1.4 var(--font-dat
 .confirm { background: var(--surface); border: 1px solid var(--err); border-radius: 8px; padding: 10px 12px; margin-block: 8px; }
 a { color: var(--accent); }
 a.btn, a.icon-btn { text-decoration: none; }
+/* collapsing and presets */
+.force > header { align-items: center; }
+.fold { background: none; border: 0; padding: 4px; margin-left: -6px; color: var(--muted); display: inline-flex; border-radius: 6px; }
+.fold:hover { color: var(--fg); background: var(--surface-2); }
+.collapsed-sum { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 0 2px; color: var(--muted); font-size: .9rem; }
+.collapsed-sum:hover { color: var(--fg); }
+.err-text { color: var(--err); font-weight: 600; }
+.preset-row { display: flex; align-items: center; gap: 4px; }
+.preset-row .pick { flex: 1; min-width: 0; }
+.preset-form { display: grid; gap: 6px; margin-block: 10px; padding: 10px 12px; border: 1px solid var(--brass); border-radius: 8px; background: var(--surface); }
+.preset-form label { font-weight: 600; font-size: .85rem; }
+.preset-form input { flex: 1; min-width: 10em; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }

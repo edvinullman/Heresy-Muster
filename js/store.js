@@ -50,3 +50,36 @@ export async function decodeShare(code) {
   delete raw.v;
   return raw;
 }
+
+// ---- presets: saved units and detachments, reusable across lists ----
+const PKEY = 'hh3-presets-v1';
+
+export function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PKEY) || '[]'); } catch { return []; }
+}
+
+function savePresets(list) {
+  try { localStorage.setItem(PKEY, JSON.stringify(list)); return true; } catch { return false; }
+}
+
+export function addPreset(preset) {
+  const list = loadPresets();
+  list.unshift(preset);
+  return savePresets(list);
+}
+
+export function deletePreset(id) {
+  savePresets(loadPresets().filter(p => p.id !== id));
+}
+
+// Deep copy of saved selections or a force, with fresh ids.
+export function freshCopy(raw) {
+  const c = JSON.parse(JSON.stringify(raw));
+  const reid = (r) => {
+    r.id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    (r.selections || []).forEach(reid);
+    (r.forces || []).forEach(reid);
+  };
+  reid(c);
+  return c;
+}

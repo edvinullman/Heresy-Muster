@@ -3,7 +3,7 @@ import { GameData } from './data.js';
 import { loadFiles, clearCache } from './loader.js';
 import { Roster, newRosterRaw } from './engine.js';
 import { loadLists, upsertList, deleteList } from './store.js';
-import { encodeShare, decodeShare } from './store.js';
+import { encodeShare, decodeShare, loadPresets, addPreset, deletePreset, freshCopy } from './store.js';
 import { rosterText } from './export.js';
 import { POINTS_ID, DATA_COMMIT, DATA_DATE, DATA_REPO, DEFAULT_POINTS } from './config.js';
 
@@ -17,6 +17,7 @@ let roster = null;      // current Roster
 let sheet = null;       // { type, ... }
 let issues = [];        // validation results for current roster
 let confirmKey = null;  // pending inline confirmation
+let namingKey = null;   // which "save as preset" name field is open
 
 // ---------- helpers ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,6 +37,8 @@ const icon = {
   back: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
   close: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   menu: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>',
+  down: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  right: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
   shield: '<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l10 5.5v6.5c0 6.5-4.4 11-10 12-5.6-1-10-5.5-10-12V9.5z" fill="none" stroke="currentColor" stroke-width="2.2" style="color:var(--brass)"/><path d="M16 10v12M11 15h10" stroke="currentColor" stroke-width="2" style="color:var(--brass)"/></svg>',
 };
 
@@ -250,35 +253,59 @@ function unitSummary(sel) {
   return parts.join(', ');
 }
 
+function presetForm(key, act, uid, suggested) {
+  return `<form class="preset-form" data-preset-form="${act}" data-uid="${uid}">
+    <label for="pn-${esc(key)}">Preset name</label>
+    <div class="row"><input id="pn-${esc(key)}" value="${esc(suggested)}" maxlength="60" required>
+    <button class="btn small primary" type="submit">Save preset</button><button class="btn small ghost" type="button" data-act="cancel-name">Cancel</button></div></form>`;
+}
+
 function renderForce(f, depth) {
   const st = roster.forceState(f);
-  const units = f.sels.map(s => {
-    const st2 = roster.selState(s);
-    const iss = issuesFor(s);
-    const cls = iss.some(i => i.level === 'error') ? 'has-err' : iss.length ? 'has-warn' : '';
-    const cat = st2.primary ? data.categoryName(st2.primary, f.catalogueId) : '';
-    return `<button class="unit ${cls}" data-act="unit" data-uid="${s.uid}">
-      <span class="uname">${s.number > 1 ? s.number + '× ' : ''}${esc(st2.name)}</span>
-      <span class="upts">${pts(roster.selTotal(s, POINTS_ID))}</span>
-      <span class="usub">${esc(unitSummary(s))}</span>
-      <span class="ucat">${esc(cat)}</span></button>`;
-  }).join('');
-  const canAddUnits = roster.slots(f).some(s => !s.state.hidden);
+  const collapsed = !!f.raw.collapsed;
   const kids = f.node?.childForces().length;
   const forceIssues = issues.filter(i => i.where === f);
+  const ownIssues = issues.filter(i => i.where && (i.where === f || (i.where.kind === 'sel' && i.where.force === f)));
   const foreign = f.catalogueId !== roster.raw.catalogueId && f.parent.kind === 'roster' ? ` · ${esc(data.catalogueName(f.catalogueId))}` : '';
   const ck = 'rmf-' + f.uid;
-  return `<section class="force ${depth ? 'child' : ''}">
-    <header><h3>${esc(st?.name || f.name)}${foreign}</h3><span class="fpts">${pts(roster.forceTotal(f))} pts</span>
-      <button class="icon-btn" data-act="force-menu" data-uid="${f.uid}" aria-label="Remove ${esc(f.name)}">${icon.close}</button></header>
-    ${confirmKey === ck ? `<div class="confirm">Remove ${esc(f.name)} and everything in it? <div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-force" data-uid="${f.uid}">Remove</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : ''}
-    <div class="slots">${slotChips(f)}</div>
+  const nk = 'pf-' + f.uid;
+  let body = '';
+  if (collapsed) {
+    const errs = ownIssues.filter(i => i.level === 'error').length;
+    body = `<button class="collapsed-sum" data-act="toggle-force" data-uid="${f.uid}">
+      ${f.sels.length} ${f.sels.length === 1 ? 'entry' : 'entries'}${errs ? ` · <span class="err-text">${errs} issue${errs > 1 ? 's' : ''}</span>` : ''} · tap to open</button>
+      ${kids ? `<div class="row force-actions"><button class="btn small ghost" data-act="add-det" data-uid="${f.uid}">Add detachment</button></div>` : ''}`;
+  } else {
+    const units = f.sels.map(s => {
+      const st2 = roster.selState(s);
+      const iss = issuesFor(s);
+      const cls = iss.some(i => i.level === 'error') ? 'has-err' : iss.length ? 'has-warn' : '';
+      const cat = st2.primary ? data.categoryName(st2.primary, f.catalogueId) : '';
+      return `<button class="unit ${cls}" data-act="unit" data-uid="${s.uid}">
+        <span class="uname">${s.number > 1 ? s.number + '× ' : ''}${esc(st2.name)}</span>
+        <span class="upts">${pts(roster.selTotal(s, POINTS_ID))}</span>
+        <span class="usub">${esc(unitSummary(s))}</span>
+        <span class="ucat">${esc(cat)}</span></button>`;
+    }).join('');
+    const canAddUnits = roster.slots(f).some(s => !s.state.hidden);
+    const canSave = f.parent.kind === 'force' && f.sels.length > 0;
+    body = `<div class="slots">${slotChips(f)}</div>
     ${forceIssues.length ? `<div class="msgs">${forceIssues.slice(0, 6).map(i => `<div class="msg ${i.level}">${esc(i.msg)}</div>`).join('')}${forceIssues.length > 6 ? `<div class="hint">and ${forceIssues.length - 6} more in the issues list</div>` : ''}</div>` : ''}
     ${units}
+    ${namingKey === nk ? presetForm(nk, 'save-det-preset', f.uid, st?.name || f.name) : ''}
     <div class="row force-actions">
       ${canAddUnits ? `<button class="btn small" data-act="add-unit" data-uid="${f.uid}">Add unit</button>` : ''}
       ${kids ? `<button class="btn small ghost" data-act="add-det" data-uid="${f.uid}">Add detachment</button>` : ''}
-    </div>
+      ${canSave && namingKey !== nk ? `<button class="btn small ghost" data-act="name-det-preset" data-uid="${f.uid}">Save as preset</button>` : ''}
+    </div>`;
+  }
+  return `<section class="force ${depth ? 'child' : ''} ${collapsed ? 'is-collapsed' : ''}">
+    <header>
+      <button class="fold" data-act="toggle-force" data-uid="${f.uid}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Open' : 'Collapse'} ${esc(f.name)}">${collapsed ? icon.right : icon.down}</button>
+      <h3>${esc(st?.name || f.name)}${foreign}</h3><span class="fpts">${pts(roster.forceTotal(f))} pts</span>
+      <button class="icon-btn" data-act="force-menu" data-uid="${f.uid}" aria-label="Remove ${esc(f.name)}">${icon.close}</button></header>
+    ${confirmKey === ck ? `<div class="confirm">Remove ${esc(f.name)} and everything in it? <div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-force" data-uid="${f.uid}">Remove</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : ''}
+    ${body}
     ${f.forces.length ? `<div class="children">${f.forces.map(cf => renderForce(cf, depth + 1)).join('')}</div>` : ''}
   </section>`;
 }
@@ -372,6 +399,17 @@ function sheetContent() {
   return { title: null };
 }
 
+function presetRows(list, act) {
+  if (!list.length) return '';
+  return `<div class="pick-group"><h4>Your presets</h4>${list.map(p => {
+    const ck = 'rmp-' + p.id;
+    if (confirmKey === ck) return `<div class="confirm">Delete preset “${esc(p.name)}”?<div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-preset" data-id="${p.id}">Delete</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>`;
+    return `<div class="preset-row"><button class="pick" data-act="${act}" data-id="${p.id}" data-name="${esc((p.name + ' ' + p.what).toLowerCase())}">
+      <span>${esc(p.name)}<span class="hint"> · ${esc(p.what)}</span></span><span class="pp">${pts(p.points || 0)}</span></button>
+      <button class="icon-btn" data-act="ask-rm-preset" data-id="${p.id}" aria-label="Delete preset ${esc(p.name)}">${icon.close}</button></div>`;
+  }).join('')}</div>`;
+}
+
 function addUnitSheet() {
   const f = findForce(sheet.uid);
   if (!f) return { title: null };
@@ -383,7 +421,10 @@ function addUnitSheet() {
     groups.get(c.categoryId).push(c);
   }
   const keys = [...groups.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const keysOk = new Set(choices.map(c => c.node.key));
+  const presets = loadPresets().filter(p => p.kind === 'unit' && p.catalogueId === f.catalogueId && keysOk.has(p.key));
   const body = `<input class="search" type="search" placeholder="Search units" aria-label="Search units">
+    ${presetRows(presets, 'pick-unit-preset')}
     ${keys.map(k => `<div class="pick-group"><h4>${esc(data.categoryName(k, f.catalogueId))}</h4>
       ${groups.get(k).sort((a, b) => a.state.name.localeCompare(b.state.name)).map(c => {
         const cost = c.state.costs.get(POINTS_ID);
@@ -396,7 +437,10 @@ function addDetSheet() {
   const f = findForce(sheet.uid);
   if (!f) return { title: null };
   const choices = roster.childForceChoices(f);
+  const okKeys = new Set(choices.map(c => c.node.key));
+  const presets = loadPresets().filter(p => p.kind === 'detachment' && p.catalogueId === f.catalogueId && okKeys.has(p.key));
   const body = `<input class="search" type="search" placeholder="Search detachments" aria-label="Search detachments">
+    ${presetRows(presets, 'pick-det-preset')}
     <div class="pick-group">${choices.map(c => `<button class="pick" data-act="pick-det" data-key="${esc(c.node.key)}" data-name="${esc(c.state.name.toLowerCase())}"><span>${esc(c.state.name)}</span><span class="pp"></span></button>`).join('')}</div>`;
   return { title: 'Add detachment', body };
 }
@@ -569,7 +613,8 @@ function unitSheet() {
     <h3 class="sec">Rules</h3><div class="rules">${info.rules.map((r, i) => `<button class="rule-chip" data-act="rule" data-i="${i}">${esc(r.view.name)}</button>`).join('') || '<span class="hint">No rules listed.</span>'}</div>
     <h3 class="sec">Unit</h3>
     ${confirmKey === ck ? `<div class="confirm">Remove ${esc(st.name)}?<div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-unit" data-uid="${sel.uid}">Remove</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : ''}
-    <div class="row"><button class="btn small" data-act="dup" data-uid="${sel.uid}">Duplicate</button><button class="btn small danger" data-act="ask-rm-unit" data-uid="${sel.uid}">Remove</button></div>`;
+    ${namingKey === 'pu-' + sel.uid ? presetForm('pu-' + sel.uid, 'save-unit-preset', sel.uid, st.name) : ''}
+    <div class="row"><button class="btn small" data-act="dup" data-uid="${sel.uid}">Duplicate</button>${namingKey === 'pu-' + sel.uid ? '' : `<button class="btn small" data-act="name-unit-preset" data-uid="${sel.uid}">Save as preset</button>`}<button class="btn small danger" data-act="ask-rm-unit" data-uid="${sel.uid}">Remove</button></div>`;
   return { title: st.name, body };
 }
 
@@ -621,7 +666,7 @@ document.addEventListener('click', async (ev) => {
     case 'open': location.hash = 'list-' + el.dataset.id; return;
     case 'reload': route(); return;
     case 'clear-cache': await clearCache(); toast('Data will download again next time'); return;
-    case 'close-sheet': confirmKey = null; closeSheet(); return;
+    case 'close-sheet': confirmKey = null; namingKey = null; closeSheet(); return;
     case 'sheet-back': sheet = sheet.back; renderSheet(); return;
     case 'cancel': confirmKey = null; render(); return;
     case 'issues': openSheet({ type: 'issues' }); return;
@@ -629,8 +674,35 @@ document.addEventListener('click', async (ev) => {
     case 'add-unit': openSheet({ type: 'add-unit', uid }); return;
     case 'add-det': openSheet({ type: 'add-det', uid }); return;
     case 'add-top': openSheet({ type: 'add-top' }); return;
-    case 'unit': confirmKey = null; openSheet({ type: 'unit', uid }); return;
+    case 'unit': confirmKey = null; namingKey = null; openSheet({ type: 'unit', uid }); return;
     case 'force-menu': confirmKey = 'rmf-' + uid; render(); return;
+    case 'toggle-force': { const f = findForce(uid); if (f) { f.raw.collapsed = !f.raw.collapsed; save(); render(); } return; }
+    case 'name-det-preset': namingKey = 'pf-' + uid; render(); sheetFocus('#pn-pf-' + uid, app); return;
+    case 'name-unit-preset': namingKey = 'pu-' + uid; renderSheet(); sheetFocus('#pn-pu-' + uid, sheetRoot); return;
+    case 'cancel-name': namingKey = null; sheet ? renderSheet() : render(); return;
+    case 'ask-rm-preset': confirmKey = 'rmp-' + el.dataset.id; renderSheet(); return;
+    case 'rm-preset': deletePreset(el.dataset.id); confirmKey = null; renderSheet(); toast('Preset deleted'); return;
+    case 'pick-unit-preset': {
+      const f = findForce(sheet.uid);
+      const p = loadPresets().find(x => x.id === el.dataset.id);
+      if (!f || !p) return;
+      const raw = freshCopy(p.raw);
+      f.raw.selections.push(raw);
+      roster.refresh(); save(); issues = roster.validate();
+      sheet = { type: 'unit', uid: raw.id };
+      render(); toast(`Added ${p.name}`);
+      return;
+    }
+    case 'pick-det-preset': {
+      const f = findForce(sheet.uid);
+      const p = loadPresets().find(x => x.id === el.dataset.id);
+      if (!f || !p) return;
+      const raw = freshCopy(p.raw);
+      raw.catalogueId = f.catalogueId; raw.collapsed = false;
+      f.raw.forces.push(raw);
+      roster.refresh(); sheet = null; changed(); toast(`Added ${p.name}`);
+      return;
+    }
     case 'rm-force': { const f = findForce(uid); confirmKey = null; if (f) roster.removeForce(f); changed(); return; }
     case 'pick-unit': {
       const f = findForce(sheet.uid);
@@ -731,6 +803,38 @@ document.addEventListener('change', (ev) => {
   } else if (el.dataset.actChange === 'top-cat') {
     sheet.cat = el.value;
   }
+});
+
+function sheetFocus(sel, root) { setTimeout(() => { const i = root.querySelector(sel); if (i) { i.focus(); i.select(); } }, 30); }
+
+document.addEventListener('submit', (ev) => {
+  const form = ev.target.closest('[data-preset-form]');
+  if (!form) return;
+  ev.preventDefault();
+  const name = form.querySelector('input').value.trim();
+  if (!name) return;
+  const kind = form.dataset.presetForm;
+  const uid = form.dataset.uid;
+  let preset = null;
+  if (kind === 'save-unit-preset') {
+    const s = findSel(uid);
+    if (!s) return;
+    const raw = JSON.parse(JSON.stringify(s.raw));
+    preset = { kind: 'unit', key: s.node.key, what: roster.selState(s).name, points: roster.selTotal(s, POINTS_ID), raw, catalogueId: s.force.catalogueId };
+  } else {
+    const f = findForce(uid);
+    if (!f) return;
+    const raw = JSON.parse(JSON.stringify(f.raw));
+    delete raw.collapsed;
+    preset = { kind: 'detachment', key: f.raw.entryId, what: roster.forceState(f)?.name || f.name, points: roster.forceTotal(f), raw, catalogueId: f.catalogueId };
+  }
+  preset.id = Math.random().toString(36).slice(2, 10);
+  preset.name = name;
+  preset.created = Date.now();
+  if (!addPreset(preset)) { toast('Could not save: browser storage is full'); return; }
+  namingKey = null;
+  sheet ? renderSheet() : render();
+  toast(`Saved preset “${name}”`);
 });
 
 document.addEventListener('keydown', (e) => {
