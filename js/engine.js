@@ -596,12 +596,14 @@ export class Roster {
         if (c.type === 'min' && n < c.value && (present || c.value > 0)) {
           seen.add(dk);
           const what = field === 'selections' ? '' : field === 'forces' ? ' detachment(s)' : ' ' + this.costName(field);
-          push('error', `${name}: needs at least ${c.value}${what} in ${scopeLabel(scopeObj)} (has ${fmt(n)})`, where);
+          const inside = scopeObj.kind === 'sel' && field === 'selections';
+          push('error', inside ? `${name}: pick at least ${c.value} (has ${fmt(n)})` : `${name}: needs at least ${c.value}${what} in ${scopeLabel(scopeObj)} (has ${fmt(n)})`, where);
         }
         if (c.type === 'max' && n > c.value) {
           seen.add(dk);
           const what = field === 'selections' ? '' : field === 'forces' ? ' detachment(s)' : ' ' + this.costName(field);
-          push('error', `${name}: at most ${c.value}${what} allowed in ${scopeLabel(scopeObj)} (has ${fmt(n)})`, where);
+          const inside = scopeObj.kind === 'sel' && field === 'selections';
+          push('error', inside ? `${name}: pick at most ${c.value} (has ${fmt(n)})` : `${name}: at most ${c.value}${what} allowed in ${scopeLabel(scopeObj)} (has ${fmt(n)})`, where);
         }
       }
       if (!withMessages) return;
@@ -661,6 +663,7 @@ export class Roster {
     const raw = { id: uid(), entryId: fnode.key, catalogueId: catalogueId || (parent.kind === 'force' ? parent.catalogueId : this.raw.catalogueId), forces: [], selections: [] };
     (parent.kind === 'roster' ? this.raw.forces : parent.raw.forces).push(raw);
     this.refresh();
+    this.addMandatory(this.allForces.find(x => x.raw === raw));
     const f = this.allForces.find(x => x.raw === raw);
     // Add required sub-detachments that are visible.
     for (const cn of fnode.childForces()) {
@@ -679,12 +682,31 @@ export class Roster {
     this.refresh();
   }
 
-  addRoot(f, node, number = 1) {
+  addRoot(f, node, number = 1, { fill = true } = {}) {
     const raw = { id: uid(), path: [node.key], name: node.name, number, selections: [] };
     f.raw.selections.push(raw);
     this.refresh();
-    this.autofill(raw);
+    if (fill) this.autofill(raw);
     return raw;
+  }
+
+  // Add the entries a force must contain (e.g. Allegiance, Rite of War), leaving
+  // their own choices blank so validation asks for them.
+  addMandatory(f) {
+    for (let guard = 0; guard < 20; guard++) {
+      f = this.allForces.find(x => x.raw === f.raw);
+      if (!f) return;
+      const need = this.rootChoices(f).find(c => {
+        const min = c.state.constraints
+          .filter(k => k.type === 'min' && (k.field || 'selections') === 'selections' && (k.scope === 'parent' || k.scope === 'force'))
+          .reduce((a, k) => Math.max(a, k.value), 0);
+        if (!min) return false;
+        const have = f.sels.filter(s => s.node.key === c.node.key).reduce((a, s) => a + s.number, 0);
+        return have < min;
+      });
+      if (!need) return;
+      this.addRoot(f, need.node, 1, { fill: false });
+    }
   }
 
   addChild(parent, node, groups, number = 1) {
