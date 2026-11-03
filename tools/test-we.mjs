@@ -30,3 +30,7 @@ console.log('cen cats', r.selState(cen).categories.map(c => data.categoryName(c)
 const scm = r.allSels.find(s => s.node.name === 'Scorpius Missile Tank' && s.parent.kind === 'sel');
 const show = (items, d = 0) => items.forEach(i => { const l = r.limitsOf(i.state); console.log(' '.repeat(d * 2) + `${i.kind} ${i.state.name} hidden=${i.state.hidden} [${l.min}-${l.max}] n=${i.count} def=${i.state.defaultAmount} dsel=${i.state.defaultSelectionEntryId||''} ids=${i.node.ids.join(',')}`); if (i.children && d < 2) show(i.children, d + 1); });
 show(r.options(scm));
+const scModel = r.allSels.find(s => s.node.name === 'Scorpius Missile Tank' && s.parent.kind === 'sel');
+scModel.raw.selections.push({ id: 'old1', path: ['489c-14e8-691a-e0bc', '38c4-6abd-661e-966e'], number: 1, selections: [] });
+const r2 = new Roster(data, r.raw);
+console.log('pruned:', !JSON.stringify(r2.raw).includes('489c-14e8'), 'broken:', r2.broken);

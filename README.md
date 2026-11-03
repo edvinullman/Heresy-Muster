@@ -57,6 +57,15 @@ from that commit. It lists each file's name, id, size and catalogue links.
 Saved lists refer to entries by their data ids, so lists made on one commit usually open
 on a nearby one. Entries that no longer exist show as a warning.
 
+## Local corrections
+
+`js/corrections.js` lists fixes to mistakes in the BSData files. Each one removes a single
+entry or option by its data id after the files download. Saved lists that used a removed
+option drop it when opened. Current corrections:
+
+- Scorpius Missile Tank: Pintle #2 offered a Combi-bolter, but only one of the two
+  Pintle Mounted bolters may be exchanged. Pintle #2 now stays a bolter.
+
 ## Files
 
 | File | Purpose |
@@ -68,6 +77,7 @@ on a nearby one. Entries that no longer exist show as a warning.
 | `js/loader.js` | Downloads data files and caches them in the browser |
 | `js/data.js` | Indexes the data and resolves links between catalogues |
 | `js/engine.js` | Rules engine: modifiers, conditions, constraints, costs, validation |
+| `js/corrections.js` | Local fixes to mistakes in the data |
 | `js/export.js` | Plain-text list export |
 | `js/store.js` | Saved lists and share links |
 | `js/main.js` | Interface |

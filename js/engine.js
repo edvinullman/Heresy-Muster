@@ -4,6 +4,7 @@
 
 import { Node, ForceNode, topForceNodes, findForceNode } from './data.js';
 import { POINTS_ID } from './config.js';
+import { REMOVED_IDS } from './corrections.js';
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
@@ -108,7 +109,12 @@ export class Roster {
         }
         node = n;
       }
-      if (!node || node.isGroup) { this.broken.push(`Missing entry ${raw.name || raw.path.join('/')}`); return null; }
+      if (!node || node.isGroup) {
+        // Choices removed by a local correction are dropped quietly.
+        if (!raw.path.some(k => REMOVED_IDS.has(k))) this.broken.push(`Missing entry ${raw.name || raw.path.join('/')}`);
+        else raw._removed = true;
+        return null;
+      }
       raw.name = node.name;
       const sel = new RSel(raw, node, parent, force, groups);
       this.allSels.push(sel);
@@ -119,6 +125,9 @@ export class Roster {
       return sel;
     };
     for (const f of this.raw.forces) root.forces.push(hydrateForce(f, root));
+    const prune = (list) => { for (let i = list.length - 1; i >= 0; i--) { if (list[i]._removed) list.splice(i, 1); else prune(list[i].selections || []); } };
+    const pruneForce = (f) => { prune(f.selections || []); (f.forces || []).forEach(pruneForce); };
+    this.raw.forces.forEach(pruneForce);
     // Modifiers that act on a parent, unit or model instead of their own entry.
     for (const s of this.allSels) {
       for (const entry of s.node.modifiers()) {

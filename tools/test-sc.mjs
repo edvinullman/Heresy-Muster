@@ -1,0 +1,17 @@
+import fs from 'node:fs'; import path from 'node:path';
+import { GameData } from '../js/data.js'; import { Roster, newRosterRaw } from '../js/engine.js';
+import { MANIFEST } from '../js/manifest.js'; import { POINTS_ID } from '../js/config.js';
+const dir = process.argv[2]; const data = new GameData(MANIFEST);
+const gs = MANIFEST.find(m => m.type === 'gameSystem'); data.addFile(JSON.parse(fs.readFileSync(path.join(dir, gs.file))));
+const fac = MANIFEST.find(m => m.name.includes('Sons of Horus')); for (const m of data.filesNeeded(fac.id)) data.addFile(JSON.parse(fs.readFileSync(path.join(dir, m.file))));
+const r = new Roster(data, newRosterRaw({ name: 'T', catalogueId: fac.id, gameSystemId: gs.id, points: 3000 }));
+r.addForce(r.root, r.childForceChoices(r.root).find(c => c.node.name.startsWith('Crusade')).node);
+const FOC = () => r.allForces.find(x => x.node.name.startsWith('Crusade Force'));
+r.addForce(FOC(), r.childForceChoices(FOC()).find(c => c.node.name === 'Auxiliary - Armoured Support').node);
+const f = r.allForces.find(x => x.node.name === 'Auxiliary - Armoured Support');
+r.addRoot(f, r.rootChoices(f).find(c => c.node.name === 'Scorpius Missile Tank').node);
+const m = r.allSels.find(s => s.node.name === 'Scorpius Missile Tank' && s.parent.kind === 'sel');
+console.log('selected:', m.children.map(c => r.selState(c).name), 'pts', r.selTotal(m.parent, POINTS_ID));
+const p2 = r.options(m).find(i => i.state.name === 'Pintle #2');
+console.log('Pintle #2 visible options:', p2.children.filter(c => !c.state.hidden && r.limitsOf(c.state).max !== 0).map(c => c.state.name));
+console.log('errors:', r.validate().filter(v => v.where && v.where.uid && r.allSels.includes(v.where)).map(v => v.msg));

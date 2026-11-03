@@ -2,6 +2,8 @@
 // "nodes" the engine can walk. No DOM or network code lives here, so the same
 // file runs in the browser and in Node tests.
 
+import { REMOVED_IDS } from './corrections.js';
+
 const DEF_KEYS = new Set([
   'selectionEntries', 'selectionEntryGroups', 'sharedSelectionEntries',
   'sharedSelectionEntryGroups', 'sharedRules', 'sharedProfiles', 'rules',
@@ -26,6 +28,7 @@ export class GameData {
     const root = json[kind];
     const catId = root.id;
     if (this.files.has(catId)) return;
+    stripRemoved(root);
     this.files.set(catId, root);
     if (kind === 'gameSystem') this.gameSystem = root;
     const map = new Map();
@@ -131,6 +134,17 @@ export class GameData {
   rootNode(catId, key) {
     return this.rootNodes(catId).find(n => n.key === key) || null;
   }
+}
+
+// Apply local corrections: drop removed entries, groups and links.
+const LIST_KEYS = ['selectionEntries', 'selectionEntryGroups', 'entryLinks', 'sharedSelectionEntries', 'sharedSelectionEntryGroups'];
+function stripRemoved(o) {
+  if (!REMOVED_IDS.size || !o || typeof o !== 'object') return;
+  if (Array.isArray(o)) { o.forEach(stripRemoved); return; }
+  for (const k of LIST_KEYS) {
+    if (Array.isArray(o[k])) o[k] = o[k].filter(x => !REMOVED_IDS.has(x.id));
+  }
+  for (const k in o) { const v = o[k]; if (v && typeof v === 'object') stripRemoved(v); }
 }
 
 function flatModifiers(obj) {
