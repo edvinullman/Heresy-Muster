@@ -497,6 +497,75 @@ function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
   }).join('');
 }
 
+// ---------- condensed weapon profiles ----------
+const MELEE_MOD = { IM: 'I', AM: 'A', SM: 'S' };
+
+// Resolve a melee modifier ("+1", "-2", "A", "x2", "6") against a model's stat.
+function applyMod(mod, base) {
+  const m = String(mod ?? '').trim();
+  const b = parseInt(base, 10);
+  if (!Number.isFinite(b)) return m;
+  if (/^[IAS]$/i.test(m)) return String(b);
+  if (/^[+-]\d+$/.test(m)) return String(Math.max(1, b + parseInt(m, 10)));
+  if (/^[x×]\d+$/i.test(m)) return String(b * parseInt(m.slice(1), 10));
+  return m;
+}
+
+// The models that would carry an option chosen under `parent`, grouped by their I/A/S.
+function carriers(parent) {
+  let p = parent;
+  while (p && p.kind === 'sel' && p.node.type !== 'model' && p.node.type !== 'unit') p = p.parent;
+  if (!p || p.kind !== 'sel') return [];
+  const models = p.node.type === 'model' ? [p] : (p.children.filter(c => c.node.type === 'model').length ? p.children.filter(c => c.node.type === 'model') : [p]);
+  const groups = new Map();
+  for (const m of models) {
+    const prof = roster.infoFor(m).profiles.map(x => x.view).find(v => ['I', 'A', 'S'].every(k => v.chars.some(c => c.name === k)));
+    if (!prof) continue;
+    const stat = (k) => prof.chars.find(c => c.name === k)?.value;
+    const key = `${stat('I')}|${stat('A')}|${stat('S')}`;
+    const name = roster.selState(m).name;
+    if (!groups.has(key)) groups.set(key, { I: stat('I'), A: stat('A'), S: stat('S'), names: [] });
+    if (!groups.get(key).names.includes(name)) groups.get(key).names.push(name);
+  }
+  return [...groups.values()];
+}
+
+// One line per weapon profile; melee lines resolved per distinct carrier.
+function weaponSummary(parent, it) {
+  const ctx = { self: null, parent, force: parent.force, node: it.node, groupIds: it.groups.flatMap(g => g.ids) };
+  const profs = it.node.info().profiles
+    .filter(p => /weapon/i.test(p.obj.typeName || ''))
+    .map(p => ({ type: p.obj.typeName, view: roster.profileView(p.obj, ctx, [], p.via) }))
+    .filter(p => !p.view.hidden);
+  if (!profs.length) return '';
+  const fmtChars = (chars) => chars.filter(c => c.value !== '')
+    .map(c => /special|trait/i.test(c.name) ? (c.value && c.value !== '-' ? `<span class="wp-rules">${esc(c.value)}</span>` : '') : `<span class="wp-stat"><b>${esc(c.name)}</b> ${esc(c.value)}</span>`)
+    .join('');
+  const lines = [];
+  const holders = carriers(parent);
+  for (const p of profs) {
+    const label = profs.length > 1 ? `<span class="wp-name">${esc(p.view.name)}</span>` : '';
+    const isMelee = p.view.chars.some(c => MELEE_MOD[c.name]);
+    if (isMelee && holders.length) {
+      // Merge carriers whose resolved numbers come out the same.
+      const byResult = new Map();
+      for (const h of holders) {
+        const chars = p.view.chars.map(c => MELEE_MOD[c.name] ? { name: MELEE_MOD[c.name], value: applyMod(c.value, h[MELEE_MOD[c.name]]) } : c);
+        const key = chars.map(c => c.value).join('|');
+        if (!byResult.has(key)) byResult.set(key, { chars, names: [] });
+        byResult.get(key).names.push(...h.names);
+      }
+      for (const r of byResult.values()) {
+        const who = byResult.size > 1 ? `<span class="wp-who">${esc(r.names.join(', '))}</span>` : '';
+        lines.push(`<div class="wp-line">${label}${who}${fmtChars(r.chars)}</div>`);
+      }
+    } else {
+      lines.push(`<div class="wp-line">${label}${fmtChars(p.view.chars)}</div>`);
+    }
+  }
+  return lines.join('');
+}
+
 // Same chain format habits.js records: each selection's path, joined by '>' from the unit down.
 function optionChain(parent, it) {
   const parts = [];
@@ -553,7 +622,9 @@ function renderEntry(parent, it, depth, ctx) {
  // Tag only real choices: not mandatory gear or the default pick.
   const isDefault = l.min > 0 || it.state.defaultAmount > 0 || it.groups.some(g => g.target.defaultSelectionEntryId && it.node.ids.includes(g.target.defaultSelectionEntryId));
   const usualTag = !isDefault && usualHere && usualHere.size && usualHere.has(optionChain(parent, it)) ? '<span class="usual-tag" title="You take this in most of your builds of this unit">usual</span>' : '';
-  let html = `<div class="opt ${hiddenCls}">${control}${usualTag}<span class="ocost">${cost}</span></div>`;
+  const wsum = weaponSummary(parent, it);
+  const winfo = wsum ? `<button class="winfo" type="button" data-act="winfo" aria-label="Show ${name} profile" aria-expanded="false">i</button>` : '';
+  let html = `<div class="opt ${hiddenCls}${wsum ? ' has-wp' : ''}">${control}${usualTag}${winfo}<span class="ocost">${cost}</span>${wsum ? `<div class="wprof">${wsum}</div>` : ''}</div>`;
   // Nested options of the chosen entry (e.g. a model's wargear).
   if (depth < 4) {
     for (const s of it.sels || []) {
@@ -693,6 +764,15 @@ document.addEventListener('click', async (ev) => {
   const act = el.dataset.act;
   if (el.tagName === 'INPUT' || el.tagName === 'SELECT') return; // handled on change
   const uid = el.dataset.uid;
+  if (act === 'winfo') {
+    const box = el.closest('.opt')?.querySelector('.wprof');
+    if (box) {
+      const open = !box.classList.contains('open');
+      box.classList.toggle('open', open);
+      el.setAttribute('aria-expanded', String(open));
+    }
+    return;
+  }
   switch (act) {
     case 'open': location.hash = 'list-' + el.dataset.id; return;
     case 'reload': route(); return;
