@@ -497,6 +497,34 @@ function renderItems(parent, items, depth, ctx = { radio: null, room: [] }) {
   }).join('');
 }
 
+// ---------- rule links inside weapon profiles ----------
+// Split "Heavy (FP), Blast (3\"), Breaching (5+)" into separate rules, keeping commas inside brackets.
+function splitRules(text) {
+  const out = []; let depth = 0, cur = '';
+  for (const ch of String(text)) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// Rule names become buttons when the data has text for them; others stay plain.
+function linkRules(text) {
+  if (!text || text === '-') return esc(text);
+  return splitRules(text).map(t => data.ruleByName(t)
+    ? `<button type="button" class="rule-link" data-act="rule-name" data-rule="${esc(t)}">${esc(t)}</button>`
+    : esc(t)).join(', ');
+}
+
+function ruleSummary(label) {
+  const r = data.ruleByName(label);
+  if (!r) return '';
+  const first = String(r.description).split(/\n\s*\n/)[0].replace(/\*\*/g, '').trim();
+  return first.length > 320 ? first.slice(0, 317) + '…' : first;
+}
+
 // ---------- condensed weapon profiles ----------
 const MELEE_MOD = { IM: 'I', AM: 'A', SM: 'S' };
 
@@ -539,7 +567,7 @@ function weaponSummary(parent, it) {
     .filter(p => !p.view.hidden);
   if (!profs.length) return '';
   const fmtChars = (chars) => chars.filter(c => c.value !== '')
-    .map(c => /special|trait/i.test(c.name) ? (c.value && c.value !== '-' ? `<span class="wp-rules">${esc(c.value)}</span>` : '') : `<span class="wp-stat"><b>${esc(c.name)}</b><span class="wp-val">${esc(c.value)}</span></span>`)
+.map(c => /special|trait/i.test(c.name) ? (c.value && c.value !== '-' ? `<span class="wp-rules">${linkRules(c.value)}</span>` : '') : `<span class="wp-stat"><b>${esc(c.name)}</b><span class="wp-val">${esc(c.value)}</span></span>`)
     .join('');
   const lines = [];
   const holders = carriers(parent);
@@ -687,7 +715,8 @@ function renderProfiles(list) {
     html += `<div class="table-scroll"><table class="stats"><thead><tr><th>${esc(type)}</th>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${ps.map(p => `<tr><td>${esc(p.view.name)}</td>${cols.map(cn => { const v = p.view.chars.find(c => c.name === cn)?.value ?? ''; const long = String(v).length > 14 || (String(v).length > 6 && /[a-z]{3}/i.test(v));
           const words = /[a-z]{2}/i.test(v);
-          return `<td class="${long ? 'wrap' : words ? 'txt' : ''}">${esc(v)}</td>`; }).join('')}</tr>`).join('')}
+          const ruleCol = /special|trait/i.test(cn);
+          return `<td class="${long ? 'wrap' : words ? 'txt' : ''}">${ruleCol ? linkRules(v) : esc(v)}</td>`; }).join('')}</tr>`).join('')}
     </tbody></table></div>`;
   }
   return html;
@@ -764,6 +793,16 @@ document.addEventListener('click', async (ev) => {
   const act = el.dataset.act;
   if (el.tagName === 'INPUT' || el.tagName === 'SELECT') return; // handled on change
   const uid = el.dataset.uid;
+  if (act === 'rule-name') {
+    const label = el.dataset.rule;
+    const r = data.ruleByName(label);
+    if (!r || !roster) return;
+    hideTip();
+    const view = roster.ruleView(r, { self: null, parent: roster.root, force: null, node: null });
+    view.name = label;
+    openSheet({ type: 'rule', rule: { obj: r, view }, ruleKey: label, back: sheet });
+    return;
+  }
   if (act === 'winfo') {
     const box = el.closest('.opt')?.querySelector('.wprof');
     if (box) {
@@ -923,6 +962,29 @@ document.addEventListener('change', (ev) => {
     sheet.cat = el.value;
   }
 });
+
+// Hover summary for rule names (only on devices that can hover).
+const tip = document.createElement('div');
+tip.className = 'rule-tip'; tip.hidden = true; tip.setAttribute('role', 'tooltip');
+document.body.appendChild(tip);
+function hideTip() { tip.hidden = true; }
+if (window.matchMedia('(hover: hover)').matches) {
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest('.rule-link');
+    if (!el) { hideTip(); return; }
+    const text = ruleSummary(el.dataset.rule);
+    if (!text) return;
+    tip.innerHTML = `<strong>${esc(el.dataset.rule)}</strong><span>${esc(text)}</span><em>Click for the full rule</em>`;
+    tip.hidden = false;
+    const r = el.getBoundingClientRect();
+    const w = Math.min(340, window.innerWidth - 24);
+    tip.style.width = w + 'px';
+    tip.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
+    const below = r.bottom + 8, h = tip.offsetHeight;
+    tip.style.top = (below + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 8) : below) + 'px';
+  });
+  document.addEventListener('scroll', hideTip, true);
+}
 
 function sheetFocus(sel, root) { setTimeout(() => { const i = root.querySelector(sel); if (i) { i.focus(); i.select(); } }, 30); }
 

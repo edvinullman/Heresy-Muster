@@ -21,6 +21,7 @@ export class GameData {
     this.gameSystem = null;
     this._scopeCache = new Map();
     this._rootNodes = new Map();
+    this._ruleIndex = null;
   }
 
   addFile(json) {
@@ -49,6 +50,31 @@ export class GameData {
     walk(root, '');
     this._scopeCache.clear();
     this._rootNodes.clear();
+    this._ruleIndex = null;
+  }
+
+  // Find a rule's text by the name shown on a weapon, e.g. "Breaching (5+)" → "Breaching (X)".
+  ruleByName(label) {
+    if (!this._ruleIndex) {
+      const idx = new Map();
+      const add = (r, shared) => {
+        if (!r?.name || !r.description) return;
+        const k = ruleKey(r.name);
+        const cur = idx.get(k);
+        if (!cur || (shared && !cur.shared)) idx.set(k, { r, shared });
+      };
+      for (const root of this.files.values()) {
+        const walk = (o, key) => {
+          if (Array.isArray(o)) { for (const x of o) walk(x, key); return; }
+          if (!o || typeof o !== 'object') return;
+          if (key === 'sharedRules' || key === 'rules') add(o, key === 'sharedRules');
+          for (const k in o) { const v = o[k]; if (v && typeof v === 'object') walk(v, k); }
+        };
+        walk(root, '');
+      }
+      this._ruleIndex = idx;
+    }
+    return this._ruleIndex.get(ruleKey(label))?.r || null;
   }
 
   manifestEntry(id) { return this.manifest.find(m => m.id === id); }
@@ -134,6 +160,10 @@ export class GameData {
   rootNode(catId, key) {
     return this.rootNodes(catId).find(n => n.key === key) || null;
   }
+}
+
+function ruleKey(name) {
+  return String(name).toLowerCase().replace(/\s*\([^)]*\)\s*$/, '').replace(/[“”"']/g, '').trim();
 }
 
 // Apply local corrections: drop removed entries, groups and links.
