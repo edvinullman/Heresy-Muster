@@ -296,3 +296,12 @@ a.btn, a.icon-btn { text-decoration: none; }
 /* split loadout groups: name on its own line, controls beneath */
 .sub-title.is-split .grow { flex-basis: 100%; }
 .sub-title .stepper button { width: 36px; height: 34px; }
+/* print sheet */
+.print-rule { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.print-rule label { flex: 1; min-width: 0; display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.print-rule input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); flex: none; }
+.print-rule .pr-name { display: block; font-weight: 600; }
+.print-rule .pr-from { display: block; font-size: .8rem; }
+.excluded { margin-top: 14px; }
+.excluded summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 6px 0; }
+.print-go { position: sticky; bottom: 0; padding-block: 12px; background: var(--bg); margin-top: 16px; }

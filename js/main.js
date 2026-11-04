@@ -6,6 +6,8 @@ import { Roster, newRosterRaw } from './engine.js';
 import { loadLists, upsertList, deleteList } from './store.js';
 import { encodeShare, decodeShare, loadPresets, addPreset, deletePreset, freshCopy } from './store.js';
 import { rosterText } from './export.js';
+import { collectSheet, taggedText, DEFAULT_ALWAYS_EXCLUDED } from './printsheet.js';
+import { makeZip } from './zip.js';
 import { buildHabits, suggestUnits, usualLoadout, usualOptions, loadoutSig, unitId } from './habits.js';
 import { POINTS_ID, DATA_COMMIT, DATA_DATE, DATA_REPO, DEFAULT_POINTS } from './config.js';
 
@@ -400,6 +402,7 @@ function sheetContent() {
     case 'issues': return issuesSheet();
     case 'list-menu': return listMenuSheet();
     case 'export': return exportSheet();
+    case 'print': return printSheet();
   }
   return { title: null };
 }
@@ -785,11 +788,104 @@ function listMenuSheet() {
     <div class="field"><label for="lm-pts">Points limit</label><input id="lm-pts" type="number" inputmode="numeric" min="0" step="50" value="${limit}"></div>
     <div class="row"><button class="btn primary" data-act="save-meta">Save</button></div>
     <h3 class="sec">Share</h3>
+    <h3 class="sec">Print</h3>
+    <div class="row"><button class="btn" data-act="print-sheet">Print sheet for InDesign</button></div>
+    <p class="hint">Choose which rules to explain, then download the files for the InDesign template.</p>
+    <h3 class="sec">Share list</h3>
     <div class="row"><button class="btn" data-act="export-text">Copy as text</button><button class="btn" data-act="share-link">Copy share link</button><button class="btn" data-act="download">Download list file</button></div>
     <p class="hint">A share link carries the whole list. Anyone who opens it gets their own copy.</p>
     <h3 class="sec">Delete</h3>
     ${confirmKey === ck ? `<div class="confirm">Delete this list for good?<div class="row" style="margin-top:8px"><button class="btn small danger" data-act="rm-list">Delete</button><button class="btn small ghost" data-act="cancel">Keep</button></div></div>` : `<button class="btn danger" data-act="ask-rm-list">Delete list</button>`}`;
   return { title: 'List options', body };
+}
+
+// ---------- print sheet ----------
+function loadExcluded() {
+  try { const v = JSON.parse(localStorage.getItem('hh3-print-exclude') || 'null'); return new Set(Array.isArray(v) ? v : DEFAULT_ALWAYS_EXCLUDED); }
+  catch { return new Set(DEFAULT_ALWAYS_EXCLUDED); }
+}
+function saveExcluded(set) { try { localStorage.setItem('hh3-print-exclude', JSON.stringify([...set].sort())); } catch {} }
+
+function printSettings() {
+  roster.raw.print ||= {};
+  const pr = roster.raw.print;
+  pr.title ??= roster.raw.name;
+  pr.rules ||= {};
+  return pr;
+}
+
+async function openPrintSheet() {
+  openSheet({ type: 'print', back: sheet, loading: true });
+  try {
+    const data2 = await collectSheet(roster, data, resolveRule);
+    if (sheet?.type === 'print') { sheet.data = data2; sheet.loading = false; renderSheet(); }
+  } catch (e) {
+    console.error(e);
+    if (sheet?.type === 'print') { sheet.loading = false; sheet.error = e.message; renderSheet(); }
+  }
+}
+
+function printSheet() {
+  if (sheet.loading) return { title: 'Print sheet', body: '<p class="hint">Gathering units, weapons and rules…</p>' };
+  if (sheet.error) return { title: 'Print sheet', body: `<p>${esc(sheet.error)}</p>` };
+  const pr = printSettings();
+  const d = sheet.data;
+  const excluded = loadExcluded();
+  const shown = d.candidates.filter(c => !excluded.has(c.match));
+  const hidden = d.candidates.filter(c => excluded.has(c.match));
+  const on = (c) => pr.rules[c.key] ?? !excluded.has(c.match);
+  const field = (k, label, ph = '') => `<div class="field"><label for="pf-${k}">${label}</label><input id="pf-${k}" data-print-field="${k}" value="${esc(pr[k] || '')}" placeholder="${esc(ph)}" maxlength="200"></div>`;
+  const ruleRow = (c, ex) => `<div class="print-rule">
+      <label><input type="checkbox" data-print-rule="${esc(c.key)}" ${on(c) ? 'checked' : ''}>
+      <span><span class="pr-name">${esc(c.name)}</span><span class="hint pr-from">${esc(c.from.join(', '))}</span></span></label>
+      <button class="btn small ghost" data-act="${ex ? 'unexclude' : 'exclude'}" data-match="${esc(c.match)}">${ex ? 'Stop excluding' : 'Always exclude'}</button></div>`;
+  const count = d.candidates.filter(on).length;
+  const body = `
+    <p class="hint">Everything here is saved with the list. The download holds the sheet as InDesign Tagged Text, the same content as JSON, and the script that places it in your template.</p>
+    <h3 class="sec">Cover</h3>
+    ${field('title', 'Title')}${field('subtitle', 'Subtitle', 'A short line about the army')}${field('author', 'Author')}${field('event', 'Event', 'e.g. Malmö Wargaming Weekend')}
+    <h3 class="sec">Unit headings</h3>
+    <p class="hint">Rename a unit for the sheet, for example to give a character their name.</p>
+    ${d.units.map(u => `<div class="field"><label for="pu-${u.id}">${esc(u.unitName)} <span class="hint">· ${pts(u.points)} pts</span></label><input id="pu-${u.id}" data-print-unit="${u.id}" value="${esc(u.heading)}" maxlength="120"></div>`).join('')}
+    <h3 class="sec">Rules to explain <span class="hint">${count} of ${d.candidates.length}</span></h3>
+    <div class="row" style="margin-bottom:8px"><button class="btn small ghost" data-act="print-all" data-on="1">Tick all</button><button class="btn small ghost" data-act="print-all" data-on="0">Untick all</button></div>
+    ${shown.map(c => ruleRow(c, false)).join('') || '<p class="hint">No rules to choose from.</p>'}
+    ${hidden.length ? `<details class="excluded"><summary>Always excluded (${hidden.length} in this list)</summary>
+      <p class="hint">Left out of every sheet unless ticked here. The list is kept in this browser.</p>
+      ${hidden.map(c => ruleRow(c, true)).join('')}</details>` : ''}
+    <div class="row print-go"><button class="btn primary" data-act="print-download">Download sheet files</button></div>`;
+  return { title: 'Print sheet', body };
+}
+
+async function downloadPrint() {
+  const pr = printSettings();
+  const d = sheet.data;
+  const excluded = loadExcluded();
+  const chosen = d.candidates.filter(c => pr.rules[c.key] ?? !excluded.has(c.match));
+  for (const u of d.units) { const s = findSel(u.id); if (s?.raw.printName) u.heading = s.raw.printName; }
+  const out = {
+    title: pr.title || roster.raw.name, subtitle: pr.subtitle || '', author: pr.author || '', event: pr.event || '',
+    faction: data.catalogueName(roster.raw.catalogueId), points: roster.total(), limit: roster.raw.limits[POINTS_ID] || 0,
+    data: { repo: DATA_REPO, commit: DATA_COMMIT },
+    config: d.config, units: d.units,
+    rules: chosen.map(c => ({ name: c.name, text: c.text })),
+    weapons: d.weapons,
+  };
+  const base = (out.title || 'army').replace(/[\\/:*?"<>|]+/g, '').trim() || 'army';
+  let jsx = '';
+  try { jsx = await (await fetch('indesign/PlaceArmyList.jsx')).text(); } catch {}
+  const files = [
+    { name: base + '.txt', data: taggedText(out, out.rules) },
+    { name: base + '.json', data: JSON.stringify(out, null, 2) },
+  ];
+  if (jsx) files.push({ name: 'PlaceArmyList.jsx', data: jsx });
+  const blob = makeZip(files);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = base + ' - sheet.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Downloaded sheet files');
 }
 
 function exportSheet() {
@@ -936,6 +1032,21 @@ document.addEventListener('click', async (ev) => {
       roster.refresh(); sheet = null; changed(); toast('Saved'); return;
     }
     case 'export-text': openSheet({ type: 'export', back: sheet }); return;
+    case 'print-sheet': openPrintSheet(); return;
+    case 'print-download': downloadPrint(); return;
+    case 'print-all': {
+      const pr = printSettings();
+      for (const c of sheet.data.candidates) pr.rules[c.key] = el.dataset.on === '1';
+      save(); renderSheet(); return;
+    }
+    case 'exclude': case 'unexclude': {
+      const ex = loadExcluded();
+      if (act === 'exclude') ex.add(el.dataset.match); else ex.delete(el.dataset.match);
+      saveExcluded(ex);
+      const pr = printSettings();
+      for (const c of sheet.data.candidates) if (c.match === el.dataset.match) delete pr.rules[c.key];
+      save(); renderSheet(); return;
+    }
     case 'copy-text': {
       const ta = sheetRoot.querySelector('textarea.export');
       if (!(await copy(ta.value))) { ta.focus(); ta.select(); toast('Select all and copy'); }
@@ -964,8 +1075,16 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+document.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if (!roster) return;
+  if (el.dataset.printField) { printSettings()[el.dataset.printField] = el.value; save(); }
+  else if (el.dataset.printUnit) { const s = findSel(el.dataset.printUnit); if (s) { s.raw.printName = el.value.trim() || undefined; save(); } }
+});
+
 document.addEventListener('change', (ev) => {
   const el = ev.target;
+  if (el.dataset.printRule) { printSettings().rules[el.dataset.printRule] = el.checked; save(); renderSheet(); return; }
   const act = el.dataset.act;
   if (act === 'check') {
     const { parent, item } = findItem(el.dataset.parent, el.dataset.item);

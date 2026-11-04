@@ -23,6 +23,27 @@ under you.
   loadout for a unit. Learned only from lists and presets saved in your browser;
   presets count extra. It never ranks units by strength.
 
+## Print sheets for InDesign
+
+List options › **Print sheet for InDesign** gathers the list into a printable sheet:
+cover fields, a heading per unit (rename a unit to give a character its name), and every
+rule that could be explained. Tick the rules to include; rules on the *always excluded*
+list (Rending, Breaching and other universal rules) start unticked. That list is kept in
+the browser and can be changed from the same panel.
+
+**Download sheet files** gives one archive with:
+
+- `<title>.txt` – InDesign Tagged Text using these paragraph styles: `HM Unit Image`
+  (empty paragraph for the unit picture), `HM Unit Heading`, `HM Unit Line`,
+  `HM Section Heading`, `HM Rule`, `HM Rule Continued`, `HM Weapon Header`,
+  `HM Weapon Line` (tab separated), and character styles `HM Rule Name` and
+  `HM Rule Lead`. Define them in the template; bullets and tab stops belong in the styles.
+- `<title>.json` – the same content, for scripts.
+- `PlaceArmyList.jsx` – places the sheet into the text frame labelled `ArmyList`, fills
+  frames labelled `ArmyTitle`, `ArmySubtitle`, `ArmyAuthor` and `ArmyEvent`, and puts
+  each unit's image (named after the unit, from a folder you pick) above its heading.
+  Copy it to InDesign's Scripts Panel folder. The script is in `indesign/` too.
+
 ## Put it online (free)
 
 Pick one. Both give you a normal web address to send your friends.
@@ -89,6 +110,9 @@ option drop it when opened. Current corrections:
 | `js/rule-names.js` | Matches rule names on weapons to their rule (handles spelling slips) |
 | `js/rule-index.js` | Which data file defines each rule (names and ids only), for loading rules on demand |
 | `js/export.js` | Plain-text list export |
+| `js/printsheet.js` | Print sheet content and InDesign Tagged Text |
+| `js/zip.js` | Bundles the print files into one download |
+| `indesign/PlaceArmyList.jsx` | InDesign script that places a print sheet |
 | `js/store.js` | Saved lists and share links |
 | `js/main.js` | Interface |
 | `tools/` | Node test scripts (`node tools/test-all.mjs <data-folder>`) |

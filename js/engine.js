@@ -857,7 +857,10 @@ function pickDefault(groupItem, r) {
     const hit = flat.find(i => i.node.ids.includes(want));
     if (hit) return hit;
   }
-  return flat.find(i => i.state.defaultAmount > 0) || flat[0] || null;
+  // No default in the data: prefer an entry marked as default, then the group's own
+  // direct option (the base kit) over picks nested in "may exchange for" sub-groups.
+  const direct = groupItem.children.filter(i => i.kind === 'entry' && usable(i));
+  return flat.find(i => i.state.defaultAmount > 0) || direct[0] || flat[0] || null;
 }
 
 function sameGroups(a, b) {
