@@ -2,7 +2,7 @@
 // "nodes" the engine can walk. No DOM or network code lives here, so the same
 // file runs in the browser and in Node tests.
 
-import { REMOVED_IDS } from './corrections.js';
+import { REMOVED_IDS, RENAMES } from './corrections.js';
 import { ruleKey, ruleKeys } from './rule-names.js';
 import { RULE_INDEX } from './rule-index.js';
 
@@ -188,8 +188,9 @@ export class GameData {
 // Apply local corrections: drop removed entries, groups and links.
 const LIST_KEYS = ['selectionEntries', 'selectionEntryGroups', 'entryLinks', 'sharedSelectionEntries', 'sharedSelectionEntryGroups'];
 function stripRemoved(o) {
-  if (!REMOVED_IDS.size || !o || typeof o !== 'object') return;
+  if ((!REMOVED_IDS.size && !RENAMES.size) || !o || typeof o !== 'object') return;
   if (Array.isArray(o)) { o.forEach(stripRemoved); return; }
+  if (o.id && RENAMES.has(o.id) && typeof o.name === 'string') o.name = RENAMES.get(o.id);
   for (const k of LIST_KEYS) {
     if (Array.isArray(o[k])) o[k] = o[k].filter(x => !REMOVED_IDS.has(x.id));
   }

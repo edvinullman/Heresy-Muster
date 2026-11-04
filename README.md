@@ -66,11 +66,13 @@ on a nearby one. Entries that no longer exist show as a warning.
 ## Local corrections
 
 `js/corrections.js` lists fixes to mistakes in the BSData files. Each one removes a single
-entry or option by its data id after the files download. Saved lists that used a removed
+entry or option, or renames one, by its data id after the files download. Saved lists that used a removed
 option drop it when opened. Current corrections:
 
 - Scorpius Missile Tank: Pintle #2 offered a Combi-bolter, but only one of the two
   Pintle Mounted bolters may be exchanged. Pintle #2 now stays a bolter.
+- Solar Auxilia Exalted Section: "Laspistol and Charnible Sabre" renamed to
+  "Laspistol and charnabal sabre" (two entries).
 
 ## Files
 
