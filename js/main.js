@@ -670,10 +670,15 @@ function renderEntry(parent, it, depth, ctx) {
       const hasVisible = sub.some(x => !x.state.hidden || x.count > 0);
       if (!hasVisible) continue;
       const many = s.number > 1;
-      html += `<div class="sub"><div class="sub-title"><span class="grow">${esc(roster.selState(s).name)}${many ? ` ×${s.number}` : ''}</span>
+      const split = it.sels.length > 1;
+      const sname = esc(roster.selState(s).name);
+      // With several loadout groups, each gets a stepper that moves models to or from the main group.
+      const mover = split ? `<span class="stepper" title="Move models between loadouts"><button data-act="move" data-d="-1" data-uid="${s.uid}" aria-label="Move one ${sname} to the other loadout">−</button><output>${s.number}</output><button data-act="move" data-d="1" data-uid="${s.uid}" aria-label="Move one more ${sname} to this loadout">+</button></span>` : '';
+      html += `<div class="sub"><div class="sub-title ${split ? 'is-split' : ''}"><span class="grow">${sname}${!split && many ? ` ×${s.number}` : ''}</span>
+        ${mover}
         ${many ? `<button class="btn small ghost" data-act="split" data-uid="${s.uid}">Change one</button>` : ''}
-        ${(it.sels.length > 1) ? `<button class="btn small ghost danger" data-act="rm-sel" data-uid="${s.uid}">Remove</button>` : ''}</div>
-        ${many ? `<div class="hint">Choices here apply to all ${s.number}.</div>` : ''}
+        ${split ? `<button class="btn small ghost danger" data-act="rm-sel" data-uid="${s.uid}">Remove</button>` : ''}</div>
+        ${split ? `<div class="hint">${s.number} ${s.number === 1 ? 'model has' : 'models have'} this loadout. − and + move models to or from the other loadout.</div>` : many ? `<div class="hint">Choices here apply to all ${s.number}.</div>` : ''}
         ${renderOptions(s, depth + 1)}</div>`;
     }
   }
@@ -909,6 +914,7 @@ document.addEventListener('click', async (ev) => {
       return;
     }
     case 'split': { const s = findSel(uid); if (s) roster.splitOne(s); changed(); return; }
+    case 'move': { const s = findSel(uid); if (s) roster.moveModels(s, Number(el.dataset.d)); changed(); return; }
     case 'rm-sel': { const s = findSel(uid); if (s) roster.removeSel(s); changed(); return; }
     case 'dup': { const s = findSel(uid); if (s) { const raw = roster.duplicate(s); sheet = { type: 'unit', uid: raw.id }; toast('Duplicated'); } changed(); return; }
     case 'ask-rm-unit': confirmKey = 'rmu-' + uid; renderSheet(); return;

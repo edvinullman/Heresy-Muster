@@ -738,7 +738,8 @@ export class Roster {
     const current = existing.reduce((a, s) => a + s.number, 0);
     if (n === current) return;
     if (n > current) {
-      if (existing.length) { const s = existing[existing.length - 1]; s.raw.number = s.number + (n - current); this.refresh(); }
+      // New models join the largest loadout group (the "default" loadout).
+      if (existing.length) { const s = existing.reduce((a, b) => (b.number > a.number ? b : a)); s.raw.number = s.number + (n - current); this.refresh(); }
       else this.addChild(parent, item.node, item.groups, n);
       return;
     }
@@ -763,6 +764,23 @@ export class Roster {
     this.refresh();
     const p = this.allSels.find(s => s.uid === parent.uid);
     if (item) this.addChild(p, item.node, item.groups, 1);
+  }
+
+  // Move models between loadout groups of the same entry, keeping the total.
+  // d = +1 takes one from the largest other group; d = -1 gives one back to it.
+  moveModels(sel, d) {
+    const key = sel.raw.path.join('/');
+    const others = sel.parent.children.filter(c => c !== sel && c.raw.path.join('/') === key);
+    if (!others.length) return;
+    const other = others.reduce((a, b) => (b.number > a.number ? b : a));
+    const [from, to] = d > 0 ? [other, sel] : [sel, other];
+    if (from.number < 1) return;
+    to.raw.number = to.number + 1;
+    if (from.number === 1) {
+      const list = from.parent.raw.selections;
+      list.splice(list.indexOf(from.raw), 1);
+    } else from.raw.number = from.number - 1;
+    this.refresh();
   }
 
   splitOne(sel) {

@@ -293,3 +293,6 @@ a.btn, a.icon-btn { text-decoration: none; }
   font-size: .85rem; line-height: 1.4; pointer-events: none;
 }
 .rule-tip em { color: var(--muted); font-size: .78rem; }
+/* split loadout groups: name on its own line, controls beneath */
+.sub-title.is-split .grow { flex-basis: 100%; }
+.sub-title .stepper button { width: 36px; height: 34px; }
