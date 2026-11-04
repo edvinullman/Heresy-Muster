@@ -847,6 +847,8 @@ function printSheet() {
     <h3 class="sec">Unit headings</h3>
     <p class="hint">Rename a unit for the sheet, for example to give a character their name.</p>
     ${d.units.map(u => `<div class="field"><label for="pu-${u.id}">${esc(u.unitName)} <span class="hint">· ${pts(u.points)} pts</span></label><input id="pu-${u.id}" data-print-unit="${u.id}" value="${esc(u.heading)}" maxlength="120"></div>`).join('')}
+    <h3 class="sec">Weapon profiles</h3>
+    <p class="hint">All ${d.weapons.ranged.length + d.weapons.melee.length} weapons in the list are always included in the weapon tables, whichever rules you pick below.</p>
     <h3 class="sec">Rules to explain <span class="hint">${count} of ${d.candidates.length}</span></h3>
     <div class="row" style="margin-bottom:8px"><button class="btn small ghost" data-act="print-all" data-on="1">Tick all</button><button class="btn small ghost" data-act="print-all" data-on="0">Untick all</button></div>
     ${shown.map(c => ruleRow(c, false)).join('') || '<p class="hint">No rules to choose from.</p>'}
